@@ -33,6 +33,16 @@ Also used:
 
 ## What's new: Live Karaoke Room
 
+<p align="center">
+  <img src="photos/01.png" alt="Karaoke Room: 5 seats, invite and word-synced lyrics" width="900">
+  <br><sub>The room page: seats, invite and live synced lyrics</sub>
+</p>
+
+<p align="center">
+  <img src="photos/02.png" alt="Mic &amp; sound check and singing mode" width="900">
+  <br><sub>Mic &amp; sound check: pick your mic, see the level, record and play back</sub>
+</p>
+
 - 🎤 **Rooms for up to 5 people.** Create a room, get a 6-character Room ID, share it. A 6th
   person is told the room is full.
 - 🎶 **The host picks the music.** Whatever the host plays, everyone hears at the same time on
