@@ -26,6 +26,12 @@ let _action = null;
 export function registerPlayerAction(fn) { _action = fn; }
 export function sendPlayerCommand(action) { _action && _action(action); }
 
+// "Play this track" — registered by App (which owns the queue). Live Karaoke Room guests use it
+// to load the song the host is playing (src/karaoke/sync.js).
+let _play = null;
+export function registerPlayHandler(fn) { _play = fn; }
+export function sendPlay(track, trackList) { _play && _play(track, trackList); }
+
 // The real playback clock is the IpcAudio shim (currentTime/paused + timeupdate events), not a
 // DOM <audio> element.
 let _audio = null;

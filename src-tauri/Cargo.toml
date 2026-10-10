@@ -40,6 +40,11 @@ base64     = "0.22"
 # OS media controls (Windows SMTC, macOS Now Playing, Linux MPRIS) + media keys.
 souvlaki   = "0.7"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Live Karaoke Room: switch on WebKitGTK media capture + WebRTC and answer its microphone
+# permission request (src/karaoke.rs). Same version/feature level wry already uses.
+webkit2gtk = { version = "2.0", features = ["v2_40"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # Runtime Dock icon (NSApplication) + persistent .app bundle icon (NSWorkspace) for the
 # app-icon personalization feature.
@@ -47,6 +52,10 @@ objc  = "0.2"
 cocoa = "0.24"
 
 [target.'cfg(windows)'.dependencies]
+# Live Karaoke Room: grant WebView2's microphone PermissionRequested for Kodama's own pages
+# (src/karaoke.rs). Same version wry/tauri-runtime-wry already pull in — no extra build.
+webview2-com = "0.38"
+windows-core = "0.61"
 # xcap (bug-report screenshot) doesn't compile on macOS (xcap 0.0.14 macos backend) — Windows only.
 xcap = "0.0.14"
 windows = { version = "0.58", features = [

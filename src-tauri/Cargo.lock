@@ -2710,7 +2710,10 @@ dependencies = [
  "tauri-plugin-updater",
  "tokio",
  "url",
+ "webkit2gtk",
+ "webview2-com",
  "windows 0.58.0",
+ "windows-core 0.61.2",
  "xcap",
 ]
 

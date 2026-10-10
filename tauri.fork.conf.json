@@ -1,0 +1,14 @@
+{
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "resources": {
+      "resources/node.exe": "node.exe",
+      "resources/potgen/server": "potgen/server"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": ["https://example.invalid/latest.json"]
+    }
+  }
+}

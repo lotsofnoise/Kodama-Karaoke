@@ -106,3 +106,10 @@ tools/
 
 # Source recordings/screenshots for the landing page (web versions live in docs/shots/)
 raw-media/
+
+# Live Karaoke Room e2e screenshots
+e2e/karaoke/out/
+__pycache__/
+
+# PO-token generator source, cloned during the Windows build (README step 7)
+potgen-src/

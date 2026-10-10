@@ -1,0 +1,171 @@
+/* Live Karaoke Room. Uses only Kodama's theme tokens, so every installed theme applies. */
+
+/* ── word-level lyric fill ──────────────────────────────────────────────────── */
+.kk-line {
+  color: color-mix(in srgb, var(--text-primary) 38%, transparent);
+  transition: color 0.25s ease, opacity 0.25s ease, transform 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+  overflow-wrap: anywhere;
+}
+.kk-line.is-active { color: var(--text-primary); }
+.kk-line.is-past { opacity: 0.45; }
+.kk-line.is-next { opacity: 0.8; }
+
+/* A word fills left→right with the accent while it is being sung (--p: 0..1, set per frame). */
+.kk-word {
+  --p: 0;
+  background-image: linear-gradient(90deg,
+    var(--accent) 0%, var(--accent) calc(var(--p) * 100%),
+    color-mix(in srgb, var(--text-primary) 42%, transparent) calc(var(--p) * 100%));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  white-space: pre-wrap;
+}
+.kk-line:not(.is-active) .kk-word {
+  /* Only the line being sung shows the per-word fill; the others read as plain text (no stale
+     half-filled words after a seek backwards). */
+  background-image: none;
+  color: inherit;
+}
+.kk-line.line-sync.is-active { color: var(--accent); }
+.kk-bg { font-size: 0.72em; opacity: 0.85; display: block; margin-top: 2px; }
+
+/* ── participant avatars ────────────────────────────────────────────────────── */
+.kk-avatar {
+  --hue: 322;
+  --lvl: 0;
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--r-full);
+  font-weight: 700;
+  color: hsl(var(--hue) 70% 82%);
+  background: hsl(var(--hue) 55% 45% / 0.28);
+  box-shadow:
+    0 0 0 2px hsl(var(--hue) 70% 60% / 0.9),
+    0 0 0 calc(2px + var(--lvl) * 7px) hsl(var(--hue) 80% 62% / calc(0.15 + var(--lvl) * 0.35));
+  transition: box-shadow 0.09s linear;
+  flex-shrink: 0;
+  user-select: none;
+}
+.kk-avatar.is-empty {
+  color: var(--text-muted);
+  background: transparent;
+  box-shadow: none;
+  border: 1.5px dashed var(--stroke-med, var(--border));
+}
+.kk-avatar.is-offline { filter: grayscale(0.8); opacity: 0.6; }
+
+.kk-badge {
+  position: absolute;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--r-full);
+  background: var(--overlay, var(--bg-elevated));
+  box-shadow: var(--elevation-1);
+  font-size: 9px;
+}
+.kk-badge.mic { right: -3px; bottom: -3px; width: 18px; height: 18px; color: var(--text-secondary); }
+.kk-badge.mic.is-muted { color: var(--status-danger); }
+.kk-badge.host { left: -4px; top: -5px; width: 17px; height: 17px; color: var(--status-warning); }
+
+/* ── floating room overlay ──────────────────────────────────────────────────── */
+.kk-overlay {
+  position: fixed;
+  z-index: 250;
+  width: 372px;
+  max-width: calc(100vw - 24px);
+  background: var(--overlay, var(--bg-elevated));
+  color: var(--text-primary);
+  border-radius: var(--r-2xl, 24px);
+  box-shadow: var(--elevation-4, 0 18px 50px rgba(0, 0, 0, 0.45));
+  overflow: hidden;
+  animation: kkIn 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.kk-overlay.is-collapsed { width: auto; }
+@keyframes kkIn { from { opacity: 0; transform: translateY(10px) scale(0.98); } }
+
+.kk-handle { cursor: grab; touch-action: none; }
+.kk-handle:active { cursor: grabbing; }
+
+.kk-icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: var(--r-full);
+  border: none; background: transparent; color: var(--text-secondary);
+  cursor: pointer; transition: background 0.15s, color 0.15s; flex-shrink: 0;
+}
+.kk-icon-btn:hover { background: var(--bg-hover, rgba(255, 255, 255, 0.07)); color: var(--text-primary); }
+.kk-icon-btn.is-danger:hover { color: var(--status-danger); }
+.kk-icon-btn.is-on { background: var(--accent-dim); color: var(--accent); }
+.kk-icon-btn.is-off { background: var(--status-danger-soft); color: var(--status-danger); }
+
+.kk-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 26px; padding: 0 10px; border-radius: var(--r-full);
+  background: var(--fill-subtle, rgba(255, 255, 255, 0.06));
+  color: var(--text-secondary); font-size: var(--t12, 12px); white-space: nowrap;
+}
+.kk-code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  letter-spacing: 0.12em; font-weight: 700; color: var(--text-primary);
+}
+
+.kk-slot-btn {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  background: none; border: none; padding: 6px 2px; border-radius: 14px;
+  cursor: pointer; color: inherit; min-width: 0; width: 100%;
+  transition: background 0.15s;
+}
+.kk-slot-btn:hover, .kk-slot-btn.is-selected { background: var(--fill-subtle, rgba(255, 255, 255, 0.05)); }
+.kk-slot-btn:disabled { cursor: default; background: none; }
+.kk-slot-name {
+  font-size: 11px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+/* ── full room page ─────────────────────────────────────────────────────────── */
+.kk-card {
+  background: var(--surface-1, var(--bg-surface));
+  border-radius: var(--r-xl, 20px);
+  padding: 20px;
+}
+.kk-entry {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
+  text-align: start; border: none; cursor: pointer; color: inherit;
+  transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1), background 0.2s;
+}
+.kk-entry:hover { transform: translateY(-2px); background: var(--surface-2, var(--bg-hover)); }
+.kk-entry-icon {
+  width: 46px; height: 46px; border-radius: 14px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent-dim); color: var(--accent); font-size: 20px;
+}
+
+.kk-seat-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.kk-seat {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 18px 10px 14px; border-radius: 18px; min-width: 0;
+  background: var(--surface-1, var(--bg-surface));
+}
+.kk-seat.is-empty { background: transparent; border: 1.5px dashed var(--stroke-dim, var(--border)); }
+
+.kk-stage {
+  position: relative;
+  border-radius: var(--r-xl, 20px);
+  padding: 28px 32px;
+  background:
+    radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 55%),
+    var(--surface-1, var(--bg-surface));
+  min-height: 300px;
+  overflow: hidden;
+}
+
+.kk-spinner {
+  width: 10px; height: 10px; border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--text-primary) 20%, transparent);
+  border-top-color: var(--accent);
+  animation: kkSpin 0.9s linear infinite;
+}
+@keyframes kkSpin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .kk-overlay, .kk-entry, .kk-line { animation: none; transition: none; }
+}

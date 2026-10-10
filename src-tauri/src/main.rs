@@ -7,6 +7,7 @@ mod server;
 mod obs;
 mod media;
 mod appicon;
+mod karaoke;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
@@ -219,6 +220,12 @@ fn main() {
                 let _ = app.deep_link().register_all();
             }
 
+            // Live Karaoke Room: let the main window's webview open the microphone (WebView2 /
+            // WebKitGTK need this granted natively; macOS uses Info.plist). See karaoke.rs.
+            if let Some(w) = app.get_webview_window("main") {
+                karaoke::enable_voice_capture(&w);
+            }
+
             // OS media controls (SMTC / Now Playing / MPRIS). setup() runs on the main thread,
             // which souvlaki requires (and where the main window's HWND is available).
             media::init(app.handle());
@@ -289,6 +296,7 @@ fn main() {
             update_tray_labels, set_close_to_tray,
             capture_screenshot,
             ensure_session_keeper, rotate_session_cookies, stop_session_keeper,
+            karaoke::karaoke_voice_active,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

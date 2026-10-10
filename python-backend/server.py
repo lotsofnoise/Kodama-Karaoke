@@ -8235,6 +8235,25 @@ def remote_page():
     return Response(_REMOTE_HTML, mimetype="text/html")
 
 
+# ─── Live Karaoke Room ─────────────────────────────────────────────────────────
+# Room server for up to 5 people (see karaoke_room.py). The main server already listens on
+# 0.0.0.0:9847, so friends on the LAN reach the host's rooms here. Rooms can only be CREATED
+# from this machine (the Kodama window); joining needs the 6-character room code. Voice goes
+# peer-to-peer over WebRTC — only signaling, playback state and lyrics pass through here.
+# As a guest, the window reaches the host's server through /karaoke/via on this one (WebKit
+# blocks http://<lan-ip> from the app's secure origin; localhost is exempt).
+from karaoke_room import create_blueprint as _karaoke_blueprint
+
+app.register_blueprint(_karaoke_blueprint(
+    is_local=_remote_is_local,
+    allow_remote_create=False,
+    max_rooms=1,
+    lan_ips=_remote_local_ips,
+    port=9847,
+    enable_proxy=True,
+))
+
+
 # ── Local system fonts ─────────────────────────────────────────────────────────
 @app.route("/api/local-fonts")
 def api_local_fonts():

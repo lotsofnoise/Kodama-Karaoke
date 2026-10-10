@@ -2,6 +2,9 @@
   "bundle": {
     "resources": {
       "resources/node": "node"
+    },
+    "macOS": {
+      "entitlements": "./Entitlements.plist"
     }
   },
   "app": {
