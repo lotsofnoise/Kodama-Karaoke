@@ -4644,19 +4644,28 @@ export default function App() {
       });
       setQueue(deduped);
     }
-    // Save to play history
-    if (track?.videoId) {
+    // Play history is recorded by the effect below, for every track that actually plays.
+  }, []);
+
+  // Play history: every track that actually plays — clicked, the queue moving on, Next/Previous,
+  // a karaoke host's song — once it has played for a few seconds, so skipping through a queue
+  // does not fill History with songs nobody listened to. The same song twice in a row stays one
+  // entry (it moves to the top with the new time).
+  useEffect(() => {
+    if (!currentTrack?.videoId || !isPlaying) return;
+    const track = currentTrack;
+    const id = setTimeout(() => {
       try {
         const key = `kiyoshi-history-${window.__activeProfile || "default"}`;
         const stored = JSON.parse(localStorage.getItem(key) || "[]");
         const entry = { ...track, playedAt: Date.now() };
-        // Don't add duplicate of the very last played track
         const filtered = stored.filter((t, i) => !(i === 0 && t.videoId === track.videoId));
         localStorage.setItem(key, JSON.stringify([entry, ...filtered].slice(0, 200)));
         window.dispatchEvent(new Event("kiyoshi-history-updated"));
       } catch {}
-    }
-  }, []);
+    }, 5000);
+    return () => clearTimeout(id);
+  }, [currentTrack, isPlaying]);
   // Live Karaoke Room guests load the host's song through this (src/karaoke/sync.js).
   useEffect(() => { registerPlayHandler(handlePlay); }, [handlePlay]);
 
