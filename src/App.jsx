@@ -1669,6 +1669,22 @@ function Player({ track, setTrack, queue, setQueue, audioRef, isPlaying, setIsPl
     return q[(idx - 1 + q.length) % q.length];
   }, []);
 
+  // What should play when the current song ends on its own. Unlike the Next button, this only
+  // wraps back to the start of the queue with repeat "all"; at the end of the queue (or a
+  // single-song queue) it returns null so playback stops and the button shows Play again.
+  const getAutoNextTrack = useCallback(() => {
+    const q = queueRef.current;
+    const t = trackRef.current;
+    if (!q.length || !t) return null;
+    const idx = q.findIndex(x => x.videoId === t.videoId);
+    if (idx === -1) return null;
+    const repeatAll = repeatRef.current === "all";
+    if (q.length === 1) return repeatAll ? q[0] : null;
+    if (shuffleRef.current) return q[Math.floor(Math.random() * q.length)];
+    if (idx + 1 < q.length) return q[idx + 1];
+    return repeatAll ? q[0] : null;
+  }, []);
+
   // Advance/rewind by one track. Updates trackRef synchronously BEFORE setTrack so a burst of
   // rapid skips (fired faster than React can commit + run the trackRef effect) each reads the
   // freshly chosen track instead of the stale one — otherwise quick successive skips under-
@@ -1939,9 +1955,10 @@ function Player({ track, setTrack, queue, setQueue, audioRef, isPlaying, setIsPl
       if (repeatRef.current === "one") {
         a.currentTime = 0; a.play();
       } else {
-        const next = getAdjacentTrack("next");
-        if (next) setTrack(next);
-        else if (repeatRef.current === "none") setIsPlaying(false);
+        const next = getAutoNextTrack();
+        if (!next) setIsPlaying(false);                       // end of the queue: stop
+        else if (next.videoId === trackRef.current?.videoId) { a.currentTime = 0; a.play(); }
+        else setTrack(next);
       }
     };
 
@@ -1971,8 +1988,8 @@ function Player({ track, setTrack, queue, setQueue, audioRef, isPlaying, setIsPl
       // Don't keep retrying a crossfade that already failed for this very track.
       if (crossfadeFailedTrackRef.current === trackRef.current?.videoId) return;
 
-      const next = getAdjacentTrack("next");
-      if (!next) return;
+      const next = getAutoNextTrack();
+      if (!next || next.videoId === trackRef.current?.videoId) return;
 
       // Per-transition override beats the global default; secs 0 = hard cut for this pair.
       const ov = crossfadeOverridesRef.current[`${trackRef.current?.videoId}__${next.videoId}`];
