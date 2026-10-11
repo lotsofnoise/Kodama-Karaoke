@@ -1,0 +1,8 @@
+name = "kodama-karaoke-lastfm"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+# Last.fm request signer for Kodama Karaoke. See README.md.
+# The API key and shared secret are NOT in this file. Store them as encrypted Worker secrets:
+#   npx wrangler secret put LASTFM_API_KEY
+#   npx wrangler secret put LASTFM_API_SECRET

@@ -294,8 +294,53 @@ if not (LASTFM_API_KEY and LASTFM_API_SECRET):
 
 LASTFM_API_ROOT = "https://ws.audioscrobbler.com/2.0/"
 
-def _lastfm_enabled():
+# Kodama Karaoke: without a local key + secret, requests can instead be signed by a small
+# online service that keeps the secret (lastfm-signer/, a Cloudflare Worker). Its address is
+# not secret: env var LASTFM_SIGNER_URL, else lastfm_signer.json ({"url": "https://..."}),
+# looked up like lastfm_config.json and bundled into the server build by the .spec files.
+LASTFM_SIGNER_URL = os.environ.get("LASTFM_SIGNER_URL", "").strip()
+if not LASTFM_SIGNER_URL:
+    _ls_candidates = []
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        _ls_candidates.append(os.path.join(sys._MEIPASS, "lastfm_signer.json"))
+    _ls_candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "lastfm_signer.json"))
+    for _ls_path in _ls_candidates:
+        try:
+            if os.path.exists(_ls_path):
+                with open(_ls_path, encoding="utf-8") as _ls:
+                    LASTFM_SIGNER_URL = str(json.load(_ls).get("url", "")).strip()
+                break
+        except Exception:
+            pass
+LASTFM_SIGNER_URL = LASTFM_SIGNER_URL.rstrip("/")
+_lastfm_signer_key = {"key": ""}   # api_key as reported by the signer (cached)
+
+def _lastfm_local():
     return bool(LASTFM_API_KEY and LASTFM_API_SECRET)
+
+def _lastfm_enabled():
+    return _lastfm_local() or bool(LASTFM_SIGNER_URL)
+
+def _lastfm_public_key():
+    """The API key for the sign-in URL: the local one, or the signer's."""
+    if _lastfm_local():
+        return LASTFM_API_KEY
+    if not _lastfm_signer_key["key"] and LASTFM_SIGNER_URL:
+        try:
+            r = requests.get(f"{LASTFM_SIGNER_URL}/key", timeout=10)
+            _lastfm_signer_key["key"] = (r.json() or {}).get("api_key", "")
+        except Exception:
+            pass
+    return _lastfm_signer_key["key"]
+
+def _lastfm_remote_sign(p):
+    """Ask the signer to sign request params. Returns (api_key, api_sig) or raises."""
+    r = requests.post(f"{LASTFM_SIGNER_URL}/sign", json={"params": p}, timeout=10)
+    d = r.json() if r.content else {}
+    if r.status_code != 200 or not d.get("api_sig"):
+        raise RuntimeError(d.get("error") or f"signer_http_{r.status_code}")
+    _lastfm_signer_key["key"] = d.get("api_key", "") or _lastfm_signer_key["key"]
+    return d["api_key"], d["api_sig"]
 
 def _lastfm_sign(params):
     """api_sig = md5 of sorted 'key+value' pairs (excl. format/callback) + secret."""
@@ -309,9 +354,17 @@ def _lastfm_call(method, params=None, http="GET", signed=False):
         return False, {"error": "lastfm_not_configured"}
     p = dict(params or {})
     p["method"] = method
-    p["api_key"] = LASTFM_API_KEY
-    if signed:
-        p["api_sig"] = _lastfm_sign(p)
+    try:
+        if _lastfm_local():
+            p["api_key"] = LASTFM_API_KEY
+            if signed:
+                p["api_sig"] = _lastfm_sign(p)
+        elif signed:
+            p["api_key"], p["api_sig"] = _lastfm_remote_sign(p)
+        else:
+            p["api_key"] = _lastfm_public_key()
+    except Exception as e:
+        return False, {"error": "signer_unavailable", "message": str(e)}
     p["format"] = "json"
     try:
         if http == "POST":
@@ -1476,7 +1529,7 @@ def lastfm_connect():
     token = data.get("token", "")
     return jsonify({
         "token": token,
-        "authUrl": f"https://www.last.fm/api/auth/?api_key={LASTFM_API_KEY}&token={token}",
+        "authUrl": f"https://www.last.fm/api/auth/?api_key={_lastfm_public_key()}&token={token}",
     })
 
 @app.route("/lastfm/session", methods=["POST"])

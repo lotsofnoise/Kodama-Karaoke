@@ -15,6 +15,11 @@ _lastfm_cfg = os.path.join(SPECPATH, 'lastfm_config.json')
 if os.path.exists(_lastfm_cfg):
     _extra_datas.append((_lastfm_cfg, '.'))
 
+# Kodama Karaoke: address of the Last.fm signing service (not secret; see lastfm-signer/).
+_lastfm_signer = os.path.join(SPECPATH, 'lastfm_signer.json')
+if os.path.exists(_lastfm_signer):
+    _extra_datas.append((_lastfm_signer, '.'))
+
 # PO-token stack: bundle the bgutil yt-dlp plugin + the yt-dlp-ejs solver scripts so the
 # frozen server can discover them (plugins via the yt_dlp_plugins namespace, EJS via its
 # data files). The node generator itself ships separately as a Tauri resource (potgen/).

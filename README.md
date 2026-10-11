@@ -234,6 +234,14 @@ cd ..\..
 
 Check that `src-tauri\resources\potgen\server\build` exists.
 
+### Optional: Last.fm sign-in for your users
+
+Skip this if you don't need Last.fm (it will show *"Not configured"*). Otherwise, set up the
+free signing service in **[lastfm-signer/README.md](lastfm-signer/README.md)** and put its address
+in `python-backend\lastfm_signer.json`, **then redo step 5** so the server picks it up. Never create
+`python-backend\lastfm_config.json` for a build you share — it would put your Last.fm secret
+into the installer.
+
 ### 8. Build the installer
 
 ```powershell
@@ -283,6 +291,14 @@ macOS and Linux should work too but haven't been tested for this fork; see
 [KARAOKE.md](KARAOKE.md) for the extra bits (microphone permission, WebRTC packages on Linux).
 
 ---
+
+## Last.fm scrobbling (for people who build it)
+
+Kodama can scrobble to Last.fm. Official Kodama builds its Last.fm key into the installer; this
+fork keeps the secret out of the installer by having a small free Cloudflare Worker sign the
+requests instead. If you build your own installer and want **Settings → Last.fm → Connect** to
+work for your users, follow **[lastfm-signer/README.md](lastfm-signer/README.md)** before
+building. Without it, Kodama shows Last.fm as *"Not configured"* and everything else works.
 
 ## How Karaoke Room works
 
