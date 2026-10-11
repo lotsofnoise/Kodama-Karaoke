@@ -398,6 +398,7 @@ class IpcAudio {
       listen("audio-ended", () => {
         if (this._fallback) return;
         this._paused = true;
+        this._ended = true;       // Rust has dropped the finished track; resume alone can't restart it
         this._fire("ended");
       });
       listen("audio-loaded", ({ payload }) => {
@@ -480,6 +481,7 @@ class IpcAudio {
     // HTML5 fallback zeroes this natively on src change; mirror that for the Rust path.
     this._currentTime = 0;
     this._duration = 0;
+    this._ended = false;
     if (this._fb) { this._fb.src = url; }
     else if (this._fb === null && this._probePromise) {
       // Probe still running — queue replay
@@ -501,6 +503,7 @@ class IpcAudio {
     if (this._fb) { this._fb.currentTime = t; return; }
     this._currentTime = t;
     this._positionAt = Date.now();
+    this._ended = false;
     if (this._srcDirty) {
       this._pendingSeekTo = t;
     } else {
@@ -536,6 +539,15 @@ class IpcAudio {
       this._fire("preparing");
       console.log("[IpcAudio] play() → audio_play (new src)");
       this._cmd("audio_play", { url: this._src, seekTo });
+    } else if (this._ended && this._src) {
+      // Play pressed after the song finished: start it again from the top. A seek rebuilds the
+      // decoder from the same source, which is how repeat-one restarts a track too.
+      this._ended = false;
+      this._paused = false;
+      this._currentTime = 0;
+      this._positionAt = Date.now();
+      console.log("[IpcAudio] play() → audio_seek 0 (track had ended)");
+      this._cmd("audio_seek", { position: 0 });
     } else {
       this._paused = false;
       console.log("[IpcAudio] play() → audio_resume");
@@ -4666,8 +4678,8 @@ export default function App() {
 
   // Play history: every track that actually plays — clicked, the queue moving on, Next/Previous,
   // a karaoke host's song — once it has played for a few seconds, so skipping through a queue
-  // does not fill History with songs nobody listened to. The same song twice in a row stays one
-  // entry (it moves to the top with the new time).
+  // does not fill History with songs nobody listened to. Each song is listed once: playing it
+  // again moves it to the top with the new time (and clears out any older duplicates).
   useEffect(() => {
     if (!currentTrack?.videoId || !isPlaying) return;
     const track = currentTrack;
@@ -4676,8 +4688,13 @@ export default function App() {
         const key = `kiyoshi-history-${window.__activeProfile || "default"}`;
         const stored = JSON.parse(localStorage.getItem(key) || "[]");
         const entry = { ...track, playedAt: Date.now() };
-        const filtered = stored.filter((t, i) => !(i === 0 && t.videoId === track.videoId));
-        localStorage.setItem(key, JSON.stringify([entry, ...filtered].slice(0, 200)));
+        const seen = new Set([track.videoId]);
+        const rest = stored.filter((t) => {
+          if (!t?.videoId || seen.has(t.videoId)) return false;
+          seen.add(t.videoId);
+          return true;
+        });
+        localStorage.setItem(key, JSON.stringify([entry, ...rest].slice(0, 200)));
         window.dispatchEvent(new Event("kiyoshi-history-updated"));
       } catch {}
     }, 5000);
