@@ -294,6 +294,11 @@ macOS and Linux should work too but haven't been tested for this fork; see
 
 ## Last.fm scrobbling (for people who build it)
 
+<p align="center">
+  <img src="photos/03.png" alt="Kodama connected to Last.fm" width="900">
+  <br><sub>Last.fm connected in Kodama's settings</sub>
+</p>
+
 Kodama can scrobble to Last.fm. Official Kodama builds its Last.fm key into the installer; this
 fork keeps the secret out of the installer by having a small free Cloudflare Worker sign the
 requests instead. If you build your own installer and want **Settings → Last.fm → Connect** to
