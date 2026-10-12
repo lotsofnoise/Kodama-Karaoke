@@ -4724,8 +4724,11 @@ export default function App() {
     if (track.videoId === currentTrack.videoId) return;
     setQueue(q => {
       const n = q.filter(x => x.videoId !== track.videoId); // move if already queued
-      const i = n.findIndex(x => x.videoId === currentTrack.videoId);
-      const at = mode === "next" ? (i < 0 ? n.length : i + 1) : n.length;
+      let i = n.findIndex(x => x.videoId === currentTrack.videoId);
+      // The queue was cleared (or replaced) while this song kept playing: put it back at the
+      // top, so "Play next" lands right after it and the queue carries on when it ends.
+      if (i < 0) { n.unshift(currentTrack); i = 0; }
+      const at = mode === "next" ? i + 1 : n.length;
       n.splice(at, 0, track);
       return n;
     });
