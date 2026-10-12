@@ -75,6 +75,8 @@ import { STATS_URL } from "./stats-endpoint.js";
 import BackgroundExtensions from "./extensions/background.jsx";
 import { KaraokeView } from "./karaoke/KaraokeView.jsx";
 import { KaraokeRoot } from "./karaoke/KaraokeRoot.jsx";
+import { karaoke } from "./karaoke/session.js";
+import { readSession, writeSession, writePosition, canSave, getOwner, setOwner, isKaraokeGuest, forgetSession } from "./play-session.js";
 
 
 
@@ -506,6 +508,8 @@ class IpcAudio {
     this._ended = false;
     if (this._srcDirty) {
       this._pendingSeekTo = t;
+      // Nothing is loaded yet, so no progress report will come back: tell the seek bar now.
+      this._fire("timeupdate");
     } else {
       this._cmd("audio_seek", { position: t });
     }
@@ -560,6 +564,17 @@ class IpcAudio {
     if (this._fb) { this._fb.pause(); return; }
     this._paused = true;
     this._cmd("audio_pause");
+  }
+
+  // Drop the loaded song entirely (nothing paused left behind to report its position). The next
+  // src + play() loads afresh, exactly as after a song ended.
+  stop() {
+    if (this._fb) { this._fb.pause(); return; }
+    this._paused = true;
+    this._ended = false;
+    this._srcDirty = !!this._src;
+    this._currentTime = 0;
+    this._cmd("audio_stop");
   }
 
   addEventListener(type, handler) {
@@ -1505,7 +1520,19 @@ function vibrantAccentFromImage(img, satMin = 0.5, light = 0.6) {
 // Bridges between our hex-string accent value and react-aria Color objects.
 // Set by App when a song is queued into an empty player: the Player then loads that next track
 // ready but does not start it. Shared between the two components through the module.
-const startPaused = { next: false };
+// `at` is where a restored session stands ready, in seconds; `vid` is the song all this is
+// for (any other song plays normally); `play` means Play was pressed before the song had loaded.
+const startPaused = { next: false, at: 0, vid: null, play: false };
+const clearStartPaused = () => { startPaused.next = false; startPaused.at = 0; startPaused.vid = null; startPaused.play = false; };
+
+// "3:45" / "1:02:03" / seconds → seconds, or 0.
+function parseTrackDuration(v) {
+  if (typeof v === "number") return v > 0 ? v : 0;
+  if (typeof v !== "string" || !v) return 0;
+  const parts = v.split(":").map(Number);
+  if (parts.some(isNaN)) return 0;
+  return parts.reduce((acc, n) => acc * 60 + n, 0);
+}
 
 function Player({ track, setTrack, queue, setQueue, audioRef, isPlaying, setIsPlaying, onEditScrobble, expanded, onExpandToggle, showLyrics, onToggleLyrics, videoAvailable = false, showVideoView = false, onSetVideoView, videoSync, queueOpen, onToggleQueue, fullscreen, onToggleFullscreen, onOpenAlbum, onOpenArtist, onExportSong, onDownloadSong, cachedSongIds, downloadingIds, onRefetchLyrics, isCustomLyrics = false, onImportLyrics, onRemoveCustomLyrics, onOpenLyricsBrowser, onPremiumDetected, onCreatePlaylist, onAddToPlaylist }) {
   // The lyrics translation toggle + target language live in the ⋮ menu; they are global
@@ -1545,6 +1572,7 @@ function Player({ track, setTrack, queue, setQueue, audioRef, isPlaying, setIsPl
   });
   const [streamUrl, setStreamUrl] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [reloadTick, setReloadTick] = useState(0);   // bumped to load the current song again
   const [isLiked, setIsLiked] = useState(false);
   const [likePulsing, setLikePulsing] = useState(false);
   const [prevBouncing, setPrevBouncing] = useState(false);
@@ -1609,8 +1637,22 @@ function Player({ track, setTrack, queue, setQueue, audioRef, isPlaying, setIsPl
       .catch(() => {});
   }, [track?.videoId, track?.albumBrowseId, track?.artistBrowseId, fetchedBrowseIds]);
 
-  const [shuffle, setShuffle] = useState(false);
-  const [repeat, setRepeat] = useState("none");
+  // Shuffle and repeat come back as the profile left them (see play-session.js).
+  const [shuffle, setShuffle] = useState(() => !!readSession(window.__activeProfile)?.shuffle);
+  const [repeat, setRepeat] = useState(() => {
+    const r = readSession(window.__activeProfile)?.repeat;
+    return r === "all" || r === "one" ? r : "none";
+  });
+  useEffect(() => { writeSession({ shuffle, repeat }); }, [shuffle, repeat]);
+  useEffect(() => {
+    const onRestored = (e) => {
+      const d = e.detail || {};
+      setShuffle(!!d.shuffle);
+      setRepeat(d.repeat === "all" || d.repeat === "one" ? d.repeat : "none");
+    };
+    window.addEventListener("kodama-session-restored", onRestored);
+    return () => window.removeEventListener("kodama-session-restored", onRestored);
+  }, []);
   const t = useLang();
 
   // LRU cache: videoId -> url (max 50 entries, Map preserves insertion order)
@@ -1724,6 +1766,12 @@ function Player({ track, setTrack, queue, setQueue, audioRef, isPlaying, setIsPl
   };
 
   const fetchUrl = useCallback(async (videoId) => {
+    // Which URL fits depends on whether the Rust audio engine is there, and that is still being
+    // checked for a moment after Kodama opens (a restored song is asked for right then).
+    for (let i = 0; i < 30 && audioRef.current && audioRef.current._fallback === null; i++) {
+      if (audioRef.current._probePromise) { await audioRef.current._probePromise.catch(() => {}); break; }
+      await new Promise(r => setTimeout(r, 100));
+    }
     // Prefer a downloaded song (served via backend, works for both Rust & HTML5). Asked every
     // time and never remembered in urlCache: a download can be deleted while the app runs, and a
     // remembered /song/cached/ URL then 404s on every play of that song until a restart. It is a
@@ -1891,6 +1939,9 @@ function Player({ track, setTrack, queue, setQueue, audioRef, isPlaying, setIsPl
 
   useEffect(() => {
     if (!track) return;
+    // A song standing ready (queued into an empty player, or a restored session) belongs to
+    // that one song: moving on to any other plays it normally, from the start.
+    if (startPaused.next && startPaused.vid !== track.videoId) clearStartPaused();
     // A real track change ends any video-mode session (the audio is reloaded fresh below), so
     // clear the flag — otherwise it lingers true after leaving a video track and keeps crossfade
     // suppressed on later songs. (The video toggle itself doesn't re-run this effect: it swaps
@@ -1900,16 +1951,25 @@ function Player({ track, setTrack, queue, setQueue, audioRef, isPlaying, setIsPl
     setStreamUrl(null);
     let cancelled = false;
 
-    fetchUrl(track.videoId).then(url => {
-      if (cancelled) return;
-      if (url) { setStreamUrl(url); }
-      else { console.error("Stream fehlgeschlagen"); }
+    // A song restored as Kodama opens can be asked for before the background server is up;
+    // that one is retried for a while instead of being left with nothing to play.
+    const load = async () => {
+      for (let attempt = 0; ; attempt++) {
+        const url = await fetchUrl(track.videoId);
+        if (cancelled) return;
+        if (url) { setStreamUrl(url); break; }
+        const waiting = startPaused.next && startPaused.vid === track.videoId;
+        if (!waiting || attempt >= 8) { console.error("Stream fehlgeschlagen"); break; }
+        await new Promise(r => setTimeout(r, 1500));
+        if (cancelled) return;
+      }
       setLoading(false);
-    });
+    };
+    load();
 
     preloadAdjacent();
     return () => { cancelled = true; };
-  }, [track]);
+  }, [track, reloadTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const a = audioRef.current;
@@ -1919,6 +1979,8 @@ function Player({ track, setTrack, queue, setQueue, audioRef, isPlaying, setIsPl
     // playing the incoming track on its second sink — skip audio_play, just sync UI.
     const skipSrcReset = skipStreamResetRef.current;
     skipStreamResetRef.current = false;
+    // Which song the player's position now belongs to (read by the play-state saving in App).
+    a.__kodamaVid = trackRef.current?.videoId || null;
 
     if (skipSrcReset) {
       // Audio already playing from the Rust crossfade — just sync state.
@@ -1936,14 +1998,25 @@ function Player({ track, setTrack, queue, setQueue, audioRef, isPlaying, setIsPl
       volumeRef.current = volume;
       // Queued into an empty player: it stands ready, the play button starts it (src alone
       // only marks the source; play() is what sends it to Rust).
-      if (startPaused.next) {
-        startPaused.next = false;
-        setIsPlaying(false);
+      if (startPaused.next && startPaused.vid === trackRef.current?.videoId) {
+        // A restored session: stand ready at the saved spot, so Play continues from there.
+        const at = startPaused.at || 0;
+        const playNow = startPaused.play;
+        clearStartPaused();
+        if (at > 0) {
+          a.currentTime = at;
+          const d = parseTrackDuration(trackRef.current?.duration);
+          if (d) setDuration(d);
+        }
+        setProgress(at);
+        // Play was pressed while it was still loading: start it now, from the saved spot.
+        if (playNow) { a.play().catch(e => console.error("[Player] play() error:", e)); setIsPlaying(true); }
+        else setIsPlaying(false);
       } else {
         a.play().catch(e => console.error("[Player] play() error:", e));
         setIsPlaying(true);
+        setProgress(0);
       }
-      setProgress(0);
     }
 
     // IpcAudio may return 0 when Rust can't determine duration from metadata;
@@ -2089,8 +2162,19 @@ function Player({ track, setTrack, queue, setQueue, audioRef, isPlaying, setIsPl
   const togglePlay = () => {
     const a = audioRef.current;
     if (!a) return;
-    if (isPlaying) { a.pause(); setIsPlaying(false); }
-    else { a.play(); setIsPlaying(true); }
+    if (isPlaying) { a.pause(); setIsPlaying(false); return; }
+    // The song is not in the player yet (still loading, or loading failed): play it as soon as
+    // it is - from the saved spot if it is a restored one - instead of showing Pause over silence.
+    if (track && (loading || !streamUrl || a.__kodamaVid !== track.videoId)) {
+      if (!(startPaused.next && startPaused.vid === track.videoId)) {
+        clearStartPaused();
+        startPaused.next = true; startPaused.vid = track.videoId;
+      }
+      startPaused.play = true;
+      if (!loading) setReloadTick(n => n + 1);
+      return;
+    }
+    a.play(); setIsPlaying(true);
   };
 
   // OS media controls (Windows SMTC / macOS Now Playing / Linux MPRIS + keyboard media keys)
@@ -2106,7 +2190,7 @@ function Player({ track, setTrack, queue, setQueue, audioRef, isPlaying, setIsPl
         const h = mediaCtlRef.current;
         const a = audioRef.current;
         switch (action) {
-          case "play":     if (a && a.paused) { a.play(); h.setIsPlaying(true); } break;
+          case "play":     if (a && a.paused) h.togglePlay(); break;
           case "pause":    if (a && !a.paused) { a.pause(); h.setIsPlaying(false); } break;
           case "toggle":   h.togglePlay(); break;
           case "next":     h.goAdjacent("next"); break;
@@ -4647,7 +4731,7 @@ export default function App() {
 
   const handlePlay = useCallback((track, trackList) => {
     if (listenerBlocked(track)) return;
-    startPaused.next = false;   // a song played on purpose plays, even if one was queued ready
+    clearStartPaused();   // a song played on purpose plays, even if one was queued ready
     setCurrentTrack(track);
     setForcedLyricsProvider(null);
     setCurrentLyricsSource("");
@@ -4720,7 +4804,7 @@ export default function App() {
     // Nothing playing yet: the song becomes the queue and stands ready in the player, but does
     // not start. Adding to the queue is not pressing play (in a room it also meant a member's
     // or a suggested song started at once for everyone).
-    if (!currentTrack) { startPaused.next = true; setQueue([track]); setCurrentTrack(track); return; }
+    if (!currentTrack) { clearStartPaused(); startPaused.next = true; startPaused.vid = track.videoId; setQueue([track]); setCurrentTrack(track); return; }
     if (track.videoId === currentTrack.videoId) return;
     setQueue(q => {
       const n = q.filter(x => x.videoId !== track.videoId); // move if already queued
@@ -5500,6 +5584,107 @@ export default function App() {
   const [reauthName, setReauthName] = useState(null); // re-login an existing profile via OAuth under its own name
   const [currentProfile, setCurrentProfile] = useState(null);
 
+  // ── Saved play state (src/play-session.js) ───────────────────────────────────
+  // Each profile's queue, song, spot in it, shuffle and repeat are saved as they change and
+  // given back - always paused - when Kodama opens, when the profile changes, and when a
+  // karaoke guest leaves a room. Nothing is saved while following someone else's room.
+  const restoringRef = useRef(false);
+  const restoreSession = useCallback((profile) => {
+    if (!profile) return;
+    const s = readSession(profile) || {};
+    const a = audioRef.current;
+    // Whatever the player holds now (a room's song) stops before the saved one stands ready:
+    // a merely paused song would keep reporting its own position over the restored one.
+    if (a) { if (a.stop) a.stop(); else if (!a.paused) a.pause(); }
+    setIsPlaying(false);
+    restoringRef.current = true;
+    setOwner(profile);
+    const q = Array.isArray(s.queue) ? s.queue.filter((x) => x?.videoId) : [];
+    const tr = s.track?.videoId ? s.track : null;
+    clearStartPaused();
+    startPaused.next = !!tr;
+    startPaused.vid = tr ? tr.videoId : null;
+    startPaused.at = tr ? Math.max(0, Number(s.position) || 0) : 0;
+    setQueue(q);
+    setCurrentTrack(tr);
+    window.dispatchEvent(new CustomEvent("kodama-session-restored", { detail: { shuffle: !!s.shuffle, repeat: s.repeat } }));
+  }, []);
+
+  // First load, and signing back in after a logout: this profile's session, once.
+  useEffect(() => {
+    // Signed out: nothing is saved over the profile while the player is emptied.
+    if (!currentProfile || !hasProfile) { setOwner(null); return; }
+    if (getOwner()) return;
+    // Kodama can show a remembered profile before its background server has started. The song
+    // is put back once the server answers, so Play has something to play at once.
+    let cancelled = false;
+    (async () => {
+      for (let i = 0; i < 120 && !cancelled; i++) {
+        try { if ((await fetch(`${API}/status`)).ok) break; } catch { /* not up yet */ }
+        await new Promise(r => setTimeout(r, 500));
+      }
+      if (!cancelled && !getOwner() && window.__activeProfile === currentProfile) restoreSession(currentProfile);
+    })();
+    return () => { cancelled = true; };
+  }, [currentProfile, hasProfile, restoreSession]);
+  // Switching profile: the switch empties the player first, then announces itself.
+  useEffect(() => {
+    const onSwitched = () => setTimeout(() => restoreSession(window.__activeProfile), 0);
+    window.addEventListener("profile-switched", onSwitched);
+    return () => window.removeEventListener("profile-switched", onSwitched);
+  }, [restoreSession]);
+
+  // Leaving a karaoke room as a guest (left, kicked, or the room ended): your own music, now.
+  useEffect(() => {
+    let wasGuest = isKaraokeGuest();
+    return karaoke.subscribe(() => {
+      const guest = isKaraokeGuest();
+      if (wasGuest && !guest) setTimeout(() => restoreSession(getOwner() || window.__activeProfile), 0);
+      wasGuest = guest;
+    });
+  }, [restoreSession]);
+  // Leaving a Listen Together room as a listener (left, kicked, or the room closed): your own
+  // music, now. A listener who becomes the room's host stays in the room and keeps the room's
+  // queue, which is theirs from then on - nothing is restored for that.
+  const togetherRole = useTogetherValue((x) =>
+    !["connecting", "open", "reconnecting", "waiting"].includes(x.status) ? "out" : isRoomListener() ? "listener" : "in");
+  const prevTogetherRoleRef = useRef(togetherRole);
+  useEffect(() => {
+    const was = prevTogetherRoleRef.current;
+    prevTogetherRoleRef.current = togetherRole;
+    if (was === "listener" && togetherRole === "out") {
+      const id = setTimeout(() => restoreSession(getOwner() || window.__activeProfile), 0);
+      return () => clearTimeout(id);
+    }
+  }, [togetherRole, restoreSession]);
+
+  // The queue and the song, shortly after each change.
+  useEffect(() => {
+    restoringRef.current = false;   // this render shows the restored session (or a real change)
+    const id = setTimeout(() => {
+      if (restoringRef.current) return;
+      writeSession({ queue: queueLatestRef.current, track: currentTrackLatestRef.current || null });
+    }, 400);
+    return () => clearTimeout(id);
+  }, [queue, currentTrack]);
+
+  // The spot in the song: every second while playing, and once more when it stops.
+  const savePosition = useCallback(() => {
+    const a = audioRef.current;
+    const tr = currentTrackLatestRef.current;
+    if (!a || !tr?.videoId || restoringRef.current || !canSave()) return;
+    if (a.__kodamaVid !== tr.videoId) return;   // the player has not switched to this song yet
+    let pos = a.currentTime || 0;
+    const dur = a.duration || 0;
+    if (dur && pos >= dur - 1) pos = 0;           // finished: next time it starts from the top
+    writePosition(tr.videoId, pos);
+  }, []);
+  useEffect(() => {
+    if (!isPlaying) { savePosition(); return; }
+    const id = setInterval(savePosition, 1000);
+    return () => clearInterval(id);
+  }, [isPlaying, savePosition]);
+
   // ── fetchProfiles + loadCachedProfile must be declared before any effect that uses them ──
 
   const fetchProfiles = useCallback(async () => {
@@ -5658,7 +5843,7 @@ export default function App() {
 
   const handleAccountRemove = useCallback(async (name) => {
     const wasActive = profiles.find(p => p.name === name)?.active;
-    await fetch(`${API}/profiles/delete`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+    await fetch(`${API}/profiles/delete`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }); forgetSession(name);
     const remaining = profiles.filter(p => p.name !== name);
     if (remaining.length === 0) { setView("home"); setCurrentTrack(null); setQueue([]); setCollection(null); setOverlayOpen(false); setQueueOpen(false); setHasProfile(false); setShowLogin(true); }
     else if (wasActive) {
@@ -6253,7 +6438,7 @@ export default function App() {
             onReauthProfile={(name) => { setReauthName(name); setAddingProfile(true); setShowLogin(true); }}
             onDeleteProfile={async (name) => {
               const wasActive = profiles.find(p => p.name === name)?.active;
-              await fetch(`${API}/profiles/delete`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+              await fetch(`${API}/profiles/delete`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }); forgetSession(name);
               const remaining = profiles.filter(p => p.name !== name);
               if (remaining.length === 0) { setView("home"); setCurrentTrack(null); setQueue([]); setCollection(null); setOverlayOpen(false); setQueueOpen(false); setHasProfile(false); setShowLogin(true); }
               else if (wasActive) {
