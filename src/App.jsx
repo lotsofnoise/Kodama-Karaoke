@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { cn, Button, ListBox, ListBoxItem, Disclosure, DisclosureHeading, DisclosureTrigger, DisclosureContent, DisclosureBody, DisclosureIndicator, Dropdown, DropdownTrigger, DropdownPopover, DropdownItem, DropdownSection, DropdownSubmenuTrigger, DropdownSubmenuIndicator, SliderRoot, SliderTrack, SliderFill, SliderThumb, toast, ToastProvider, Spinner, ProgressBar, ProgressBarTrack, ProgressBarFill, SearchFieldRoot, SearchFieldGroup, SearchFieldSearchIcon, SearchFieldInput, SearchFieldClearButton, TextFieldRoot, InputRoot, SwitchRoot, SwitchControl, SwitchThumb, CardRoot, ScrollShadowRoot, Tab } from "@heroui/react";
 import { DropdownMenu } from "./ui/zoomed-heroui.jsx";
 import { ContextMenu, CtxItem, CTX_POPOVER_ANIM } from "./ui/context-menu.jsx";
@@ -1534,7 +1534,7 @@ function parseTrackDuration(v) {
   return parts.reduce((acc, n) => acc * 60 + n, 0);
 }
 
-function Player({ track, setTrack, queue, setQueue, audioRef, isPlaying, setIsPlaying, onEditScrobble, expanded, onExpandToggle, showLyrics, onToggleLyrics, videoAvailable = false, showVideoView = false, onSetVideoView, videoSync, queueOpen, onToggleQueue, fullscreen, onToggleFullscreen, onOpenAlbum, onOpenArtist, onExportSong, onDownloadSong, cachedSongIds, downloadingIds, onRefetchLyrics, isCustomLyrics = false, onImportLyrics, onRemoveCustomLyrics, onOpenLyricsBrowser, onPremiumDetected, onCreatePlaylist, onAddToPlaylist }) {
+function Player({ track, setTrack, queue, setQueue, audioRef, isPlaying, setIsPlaying, onEditScrobble, expanded, onExpandToggle, showLyrics, onToggleLyrics, videoAvailable = false, showVideoView = false, onSetVideoView, videoSync, queueOpen, onToggleQueue, fullscreen, onToggleFullscreen, onOpenAlbum, onOpenArtist, onExportSong, onDownloadSong, cachedSongIds, downloadingIds, onRefetchLyrics, isCustomLyrics = false, onImportLyrics, onRemoveCustomLyrics, onOpenLyricsBrowser, onPremiumDetected, onCreatePlaylist, onAddToPlaylist, likedIds, onToggleLikeTrack }) {
   // The lyrics translation toggle + target language live in the ⋮ menu; they are global
   // preferences, so they come from context rather than being threaded through App().
   const {
@@ -1573,7 +1573,9 @@ function Player({ track, setTrack, queue, setQueue, audioRef, isPlaying, setIsPl
   const [streamUrl, setStreamUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const [reloadTick, setReloadTick] = useState(0);   // bumped to load the current song again
-  const [isLiked, setIsLiked] = useState(false);
+  // One liked state for the whole app (App's likedIds): the heart here, on rows and in menus
+  // always agree, and a like from here shows up in an open Liked Songs list at once.
+  const isLiked = !!(track?.videoId && likedIds?.has(track.videoId));
   const [likePulsing, setLikePulsing] = useState(false);
   const [prevBouncing, setPrevBouncing] = useState(false);
   const [nextBouncing, setNextBouncing] = useState(false);
@@ -1927,15 +1929,6 @@ function Player({ track, setTrack, queue, setQueue, audioRef, isPlaying, setIsPl
       }
     }
   }, [fetchUrl]);
-
-  useEffect(() => {
-    if (!track) return;
-    // Check if track is liked
-    fetch(`${API}/liked/ids`)
-      .then(r => r.json())
-      .then(d => setIsLiked((d.ids || []).includes(track.videoId)))
-      .catch(() => {});
-  }, [track?.videoId]);
 
   useEffect(() => {
     if (!track) return;
@@ -2356,37 +2349,11 @@ function Player({ track, setTrack, queue, setQueue, audioRef, isPlaying, setIsPl
 
   const toggleLike = async () => {
     if (!track) return;
-    const newRating = isLiked ? "INDIFFERENT" : "LIKE";
-    setIsLiked(!isLiked);
     if (!isLiked) {
       setLikePulsing(true);
       setTimeout(() => setLikePulsing(false), 450);
     }
-    try {
-      await fetch(`${API}/like/${track.videoId}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          rating: newRating,
-          title: track.title || "",
-          artists: track.artists || "",
-          album: track.album || "",
-          thumbnail: track.thumbnail || "",
-          duration: track.duration || "",
-        }),
-      });
-      // Last.fm Loved sync (backend no-ops if not connected)
-      const lfArtist = (track.artists || "").replace(/\s*-\s*Topic$/i, "").trim();
-      const lfTitle = (track.title || "").trim();
-      if (lfArtist && lfTitle) {
-        fetch(`${API}/lastfm/${newRating === "LIKE" ? "love" : "unlove"}`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ artist: lfArtist, track: lfTitle }),
-        }).catch(() => {});
-      }
-    } catch {
-      setIsLiked(isLiked); // revert on error
-    }
+    await onToggleLikeTrack?.(track);
   };
   mediaCtlRef.current.toggleLike = toggleLike; // added post-declaration, see mediaCtlRef above
 
@@ -5938,14 +5905,21 @@ export default function App() {
     return () => { cancelled = true; };
   }, []);
 
-  // Load liked song IDs on mount
+  // Load liked song IDs on mount - asked again until the background server answers (it is often
+  // still starting), and again for each profile switched to.
   useEffect(() => {
-    let cancelled = false;
-    fetch(`${API}/liked/ids`)
-      .then(r => r.json())
-      .then(d => { if (!cancelled) setLikedIds(new Set(d.ids || [])); })
-      .catch(() => {});
-    return () => { cancelled = true; };
+    let cancelled = false, timer = null;
+    const load = (attempt = 0) => {
+      clearTimeout(timer);
+      fetch(`${API}/liked/ids`)
+        .then(r => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
+        .then(d => { if (!cancelled) setLikedIds(new Set(d.ids || [])); })
+        .catch(() => { if (!cancelled && attempt < 60) timer = setTimeout(() => load(attempt + 1), 1500); });
+    };
+    load();
+    const onSwitch = () => { setLikedIds(new Set()); load(); };
+    window.addEventListener("profile-switched", onSwitch);
+    return () => { cancelled = true; clearTimeout(timer); window.removeEventListener("profile-switched", onSwitch); };
   }, []);
 
   // Auto-start OBS overlay server on mount if it was enabled in last session
@@ -5970,40 +5944,57 @@ export default function App() {
     if (!track?.videoId) return;
     const wasLiked = likedIds.has(track.videoId);
     const newRating = wasLiked ? "INDIFFERENT" : "LIKE";
-    setLikedIds(prev => {
+    const flip = (liked) => setLikedIds(prev => {
       const s = new Set(prev);
-      if (wasLiked) s.delete(track.videoId); else s.add(track.videoId);
+      if (liked) s.add(track.videoId); else s.delete(track.videoId);
       return s;
     });
-    // Un-liking while the Liked Songs collection is open: drop the row right away instead of
-    // leaving a track sitting in a list it no longer belongs to. Same dissolve the other
-    // removals use, and the same "targeted event, no refetch" approach — a reload would
-    // flash the whole list for one row.
-    if (wasLiked && view === "collection" && collection?.playlistId === "LM") {
-      const drop = () => setCollection(c => (c?.playlistId === "LM" ? {
-        ...c,
-        tracks: c.tracks.filter(x => x.videoId !== track.videoId),
-        total: typeof c.total === "number" ? Math.max(0, c.total - 1) : c.total,
-      } : c));
-      const el = document.querySelector(`[data-track-id="${CSS.escape(track.videoId)}"]`);
-      if (animations && el) dissolve(el, drop); else drop();
+    flip(!wasLiked);
+    // The song as Liked Songs lists it (artists as one string, like every other list here).
+    const artists = Array.isArray(track.artists)
+      ? track.artists.map(a => (a && a.name) || a).filter(Boolean).join(", ")
+      : (track.artists || "");
+    const album = typeof track.album === "object" && track.album ? (track.album.name || "") : (track.album || "");
+    const entry = {
+      videoId: track.videoId, setVideoId: track.setVideoId || "", title: track.title || "", artists,
+      artistBrowseId: track.artistBrowseId || "", artistLinks: track.artistLinks || undefined,
+      album, albumBrowseId: track.albumBrowseId || "", duration: track.duration || "",
+      thumbnail: track.thumbnail || "", isExplicit: !!track.isExplicit,
+    };
+    // An open Liked Songs list follows at once - no refetch, which would flash the whole list.
+    const likedOpen = view === "collection" && collection?.playlistId === "LM";
+    const updateList = (liked) => setCollection(c => {
+      if (c?.playlistId !== "LM") return c;
+      const has = c.tracks.some(x => x.videoId === track.videoId);
+      if (liked === has) return c;
+      const tracks = liked ? [entry, ...c.tracks] : c.tracks.filter(x => x.videoId !== track.videoId);
+      const total = typeof c.total === "number" ? Math.max(0, c.total + (liked ? 1 : -1)) : c.total;
+      return { ...c, tracks, total };
+    });
+    if (likedOpen) {
+      if (!wasLiked) updateList(true);
+      else {
+        const el = document.querySelector(`[data-track-id="${CSS.escape(track.videoId)}"]`);
+        // The list reuses row elements: once the row is gone, the faded one now shows the NEXT
+        // song, so its fade is undone right after the list has re-rendered (or that song stays
+        // invisible until a refresh).
+        const drop = () => {
+          flushSync(() => updateList(false));
+          if (el) { el.style.transition = ""; el.style.opacity = ""; el.style.transform = ""; }
+        };
+        if (animations && el) dissolve(el, drop); else drop();
+      }
     }
     try {
-      await fetch(`${API}/like/${track.videoId}`, {
+      const r = await fetch(`${API}/like/${track.videoId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          rating: newRating,
-          title: track.title || "",
-          artists: track.artists || "",
-          album: track.album || "",
-          thumbnail: track.thumbnail || "",
-          duration: track.duration || "",
-        }),
+        body: JSON.stringify({ rating: newRating, ...entry }),
       });
+      if (!r.ok) throw new Error(`like failed: ${r.status}`);
       // Last.fm Loved sync
       if (lastfmConnectedRef.current) {
-        const lfArtist = (track.artists || "").replace(/\s*-\s*Topic$/i, "").trim();
+        const lfArtist = artists.replace(/\s*-\s*Topic$/i, "").trim();
         const lfTitle = (track.title || "").trim();
         if (lfArtist && lfTitle) {
           fetch(`${API}/lastfm/${newRating === "LIKE" ? "love" : "unlove"}`, {
@@ -6013,12 +6004,9 @@ export default function App() {
         }
       }
     } catch {
-      // revert on error
-      setLikedIds(prev => {
-        const s = new Set(prev);
-        if (wasLiked) s.add(track.videoId); else s.delete(track.videoId);
-        return s;
-      });
+      // Not saved: put the heart (and an open Liked Songs list) back as they were.
+      flip(wasLiked);
+      if (likedOpen) updateList(wasLiked);
     }
     // collection?.playlistId rather than the whole object: it's a string, so this doesn't
     // rebuild the callback on every chunk that streams into an open collection.
@@ -6656,6 +6644,8 @@ export default function App() {
             padding: fullscreen ? 0 : "0 8px 8px 4px",
           }}>
           <Player onEditScrobble={(tr) => setScrobbleEdit(tr)}
+            likedIds={likedIds}
+            onToggleLikeTrack={handleToggleLike}
             track={currentTrack}
             setTrack={setTrackGuarded}
             queue={queue}

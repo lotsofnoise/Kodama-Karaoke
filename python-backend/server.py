@@ -5000,9 +5000,47 @@ def like_song(video_id):
                 db.commit()
             return jsonify({"ok": True, "rating": rating})
         get_ytmusic().rate_song(video_id, rating)
+        _liked_cache_apply(video_id, rating == "LIKE", data)
         return jsonify({"ok": True, "rating": rating})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+def _liked_cache_apply(video_id, liked, data):
+    """Keep the cached Liked Songs (the "LM" playlist) in step with a like or unlike.
+
+    Without this the cache kept showing the list from before, until a manual refresh fetched
+    the whole of Liked Songs from YouTube again. Liked goes to the top, as YouTube lists it."""
+    def str_or(v, default=""):
+        return v if isinstance(v, str) else default
+
+    def apply(cached):
+        tracks = [t for t in (cached.get("tracks") or []) if t.get("videoId") != video_id]
+        if liked:
+            entry = {
+                "videoId": video_id,
+                "setVideoId": str_or(data.get("setVideoId")),
+                "title": str_or(data.get("title")),
+                "artists": str_or(data.get("artists")),
+                "artistBrowseId": str_or(data.get("artistBrowseId")),
+                "album": str_or(data.get("album")),
+                "albumBrowseId": str_or(data.get("albumBrowseId")),
+                "duration": str_or(data.get("duration")),
+                "thumbnail": str_or(data.get("thumbnail")),
+                "isExplicit": bool(data.get("isExplicit", False)),
+            }
+            if isinstance(data.get("artistLinks"), list):
+                entry["artistLinks"] = data["artistLinks"]
+            tracks.insert(0, entry)
+        return {**cached, "tracks": tracks}
+
+    try:
+        if "LM" in _playlist_cache:
+            _playlist_cache["LM"] = apply(_playlist_cache["LM"])
+        disk = _load_playlist_disk("LM")
+        if disk:
+            _save_playlist_disk("LM", apply(disk))
+    except Exception as e:
+        _logging.warning(f"[liked] cache update failed (refresh fixes it): {e}")
 
 @app.route("/liked/ids")
 def liked_ids():
