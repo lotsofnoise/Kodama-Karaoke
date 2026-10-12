@@ -4191,8 +4191,20 @@ export default function App() {
     if (!lastfmConnectedRef.current) return;
     fetch(`${API}/lastfm/${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => {});
   };
+  // Asked when Kodama opens - usually before its background server has started. A failed ask
+  // used to leave Last.fm "not connected" for the whole session (nothing sent, nothing
+  // scrobbled), so it is asked again until the server answers.
+  const lastfmCheckRef = useRef(0);
   const refreshLastfm = useCallback(() => {
-    fetch(`${API}/lastfm/status`).then(r => r.json()).then(d => { lastfmConnectedRef.current = !!d.connected; }).catch(() => {});
+    const gen = ++lastfmCheckRef.current;
+    const ask = (attempt) => {
+      fetch(`${API}/lastfm/status`).then(r => r.json())
+        .then(d => { if (gen === lastfmCheckRef.current) lastfmConnectedRef.current = !!d.connected; })
+        .catch(() => {
+          if (gen === lastfmCheckRef.current && attempt < 120) setTimeout(() => ask(attempt + 1), 1000);
+        });
+    };
+    ask(0);
   }, []);
   useEffect(() => {
     refreshLastfm();
@@ -4201,27 +4213,43 @@ export default function App() {
     window.addEventListener("profile-switched", h);
     return () => { window.removeEventListener("lastfm-changed", h); window.removeEventListener("profile-switched", h); };
   }, [refreshLastfm]);
-  // On track change → reset scrobble state + send Now Playing.
+  // On track change → reset scrobble state. Now Playing and the scrobble's start time wait for
+  // the song to actually play: a song loaded paused (restored when Kodama opens, or queued into
+  // an empty player) is not being listened to yet.
   useEffect(() => {
     const vid = currentTrack?.videoId;
-    if (!vid) { scrobbleRef.current = { videoId: null, played: 0, scrobbled: false, startTs: 0 }; return; }
-    scrobbleRef.current = { videoId: vid, played: 0, scrobbled: false, startTs: Math.floor(Date.now() / 1000) };
-    const m = lfmMeta(currentTrack);
-    if (m.artist && m.track) lfmPost("now-playing", m);
+    scrobbleRef.current = { videoId: vid || null, played: 0, scrobbled: false, startTs: 0, npAt: 0 };
   }, [currentTrack?.videoId]); // eslint-disable-line react-hooks/exhaustive-deps
   // Accumulate listening seconds while playing; scrobble once past the threshold.
   useEffect(() => {
     if (!isPlaying) return;
+    const st0 = scrobbleRef.current;
+    if (st0.videoId && st0.videoId === currentTrack?.videoId) {
+      if (!st0.startTs) st0.startTs = Math.floor(Date.now() / 1000);
+      // Sent when playback starts, and again on resuming after a while (Last.fm drops a
+      // Now Playing once the song's length has passed).
+      if (Date.now() - st0.npAt > 30000) {
+        const m = lfmMeta(currentTrack);
+        if (m.artist && m.track && lastfmConnectedRef.current) { st0.npAt = Date.now(); lfmPost("now-playing", m); }
+      }
+    }
     const id = setInterval(() => {
       const st = scrobbleRef.current;
-      if (!st.videoId || st.scrobbled) return;
+      if (!st.videoId) return;
+      // Playback started before Last.fm's status was known (just after Kodama opened): send
+      // Now Playing as soon as it is.
+      if (!st.npAt && lastfmConnectedRef.current) {
+        const nm = lfmMeta(currentTrack);
+        if (nm.artist && nm.track) { st.npAt = Date.now(); lfmPost("now-playing", nm); }
+      }
+      if (st.scrobbled) return;
       st.played += 1;
       const m = lfmMeta(currentTrack);
       if (m.duration < 30) return; // Last.fm: don't scrobble tracks under 30s
       const threshold = Math.min(m.duration / 2, 240); // >50% or >4min
       if (st.played >= threshold && m.artist && m.track) {
         st.scrobbled = true;
-        lfmPost("scrobble", { ...m, timestamp: st.startTs });
+        lfmPost("scrobble", { ...m, timestamp: st.startTs || Math.floor(Date.now() / 1000) - st.played });
       }
     }, 1000);
     return () => clearInterval(id);
