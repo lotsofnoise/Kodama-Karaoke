@@ -4920,6 +4920,23 @@ def _imgproxy_cors(resp):
     return resp
 
 
+def _ytimg_fallbacks(url):
+    """The URL, then - for a YouTube video thumbnail - the smaller sizes, largest first.
+
+    Not every video has every size: older and smaller uploads often have no maxresdefault (or
+    sddefault), and the large covers ask for exactly that. Such a cover came back "not found"
+    and showed broken, although a smaller picture of the same video was there all along.
+    hqdefault, mqdefault and default exist for every video; the signed ?sqp=... query that
+    YouTube Music adds belongs to one size only, so the smaller ones go without it."""
+    import re
+    m = re.match(r"(https?://i\d*\.ytimg\.com/vi(?:_webp)?/[\w-]{11}/)(maxresdefault|sddefault|hqdefault|mqdefault|default)\.(jpg|webp)", url)
+    if not m:
+        return [url]
+    base, size = m.group(1).replace("/vi_webp/", "/vi/"), m.group(2)
+    ladder = ["maxresdefault", "sddefault", "hqdefault", "mqdefault", "default"]
+    out = [url] + [f"{base}{s}.jpg" for s in ladder[ladder.index(size):]]
+    return list(dict.fromkeys(out))
+
 @app.route("/imgproxy")
 def img_proxy():
     """Proxy YouTube thumbnail images with persistent disk cache."""
@@ -4966,7 +4983,11 @@ def img_proxy():
         headers = {"User-Agent": "Mozilla/5.0"}
         if "ytimg.com" in url or "yt3.ggpht.com" in url or "youtube.com" in url:
             headers["Referer"] = "https://music.youtube.com/"
-        r = requests.get(url, headers=headers, timeout=10)
+        r = None
+        for candidate in _ytimg_fallbacks(url):
+            r = requests.get(candidate, headers=headers, timeout=10)
+            if r.ok:
+                break
         r.raise_for_status()
         data = r.content
         content_type = r.headers.get("Content-Type", "image/jpeg")

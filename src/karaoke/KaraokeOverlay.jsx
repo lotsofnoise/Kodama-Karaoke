@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@heroui/react";
-import { useLang, thumb } from "../context.jsx";
+import { useLang, thumb, coverOf } from "../context.jsx";
 import { MicrophoneStand, Microphone, MicrophoneSlash, ArrowsOut, Minus, DoorOpen, Copy, WifiX } from "../icons.jsx";
 import { karaoke, useKaraoke } from "./session.js";
 import { SeatStrip, SeatControls, Avatar, seatsOf } from "./KaraokeSlots.jsx";
@@ -167,7 +167,7 @@ export function KaraokeOverlay({ hidden, onOpenRoom, addToast }) {
       <div className="mt-2 px-4 pt-3 pb-4" style={{ borderTop: "1px solid var(--stroke-dim, var(--border))" }}>
         {track && (
           <div className="flex items-center gap-2.5 mb-2 min-w-0">
-            {track.thumbnail && <img src={thumb(track.thumbnail)} alt="" className="w-8 h-8 rounded-md object-cover shrink-0" />}
+            {coverOf(track) && <img src={thumb(coverOf(track))} alt="" className="w-8 h-8 rounded-md object-cover shrink-0" />}
             <div className="min-w-0">
               <div className="text-[12px] font-semibold truncate">{track.title}</div>
               <div className="text-[11px] text-muted truncate">{track.artists}</div>

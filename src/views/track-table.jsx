@@ -3,7 +3,8 @@
 import React, { useState, useEffect, useMemo, useRef, useLayoutEffect } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Button } from "@heroui/react";
-import { thumb, hiResThumb, useLang, useAnimations, useTrackNumbers } from "../context.jsx";
+import { thumb, hiResThumb, coverOf, useLang, useAnimations, useTrackNumbers } from "../context.jsx";
+import { NOTE_COVER } from "../ui/image-fallback.js";
 import { useAccentColor } from "../ui/use-accent-color.js";
 import { Tooltip } from "../ui/tooltip.jsx";
 import { ProgressToast } from "../ui/progress-toast.jsx";
@@ -187,9 +188,9 @@ export function TableRow({ track, index, isPlaying, onPlay, onOpenArtist, onOpen
       <div className="flex items-center gap-3 min-w-0">
         {showNum && <span className={`w-6 text-right shrink-0 text-[length:var(--t12)] tabular-nums ${isPlaying ? "text-accent" : "text-muted"}`}>{index + 1}</span>}
         <div className="relative w-12 h-12 shrink-0 overflow-hidden rounded-lg bg-elevated">
-          {track.thumbnail
-            ? <img src={thumb(hiResThumb(track.thumbnail, 120))} alt="" className="w-full h-full object-cover" />
-            : <div className="w-full h-full bg-[image:var(--placeholder-gradient)]" />}
+          {coverOf(track)
+            ? <img src={thumb(hiResThumb(coverOf(track), 120))} alt="" className="w-full h-full object-cover" />
+            : <img src={NOTE_COVER} alt="" className="w-full h-full object-cover img-failed" />}
           {isPlaying && (
             <div className="absolute inset-0 flex items-center justify-center gap-0.5 bg-black/50">
               {anim ? [1, 2, 3].map(b => (

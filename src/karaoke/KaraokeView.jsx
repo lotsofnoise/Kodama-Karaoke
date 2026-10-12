@@ -5,7 +5,7 @@
 // word-synced lyrics stage for the song the host is playing.
 
 import { Button } from "@heroui/react";
-import { useLang, thumb } from "../context.jsx";
+import { useLang, thumb, coverOf } from "../context.jsx";
 import { MicrophoneStand, Users, Plus, ArrowRight, Copy, DoorOpen, Headphones, WifiHigh, WifiX, Lock, WarningCircle } from "../icons.jsx";
 import { Toggle } from "../ui/settings-controls.jsx";
 import { karaoke, useKaraoke } from "./session.js";
@@ -134,7 +134,7 @@ function Room({ state, addToast }) {
       {/* stage: now playing + lyrics */}
       <div className="kk-stage mt-4">
         <div className="flex items-center gap-3 mb-2">
-          {track?.thumbnail && <img src={thumb(track.thumbnail)} alt="" className="w-12 h-12 rounded-lg object-cover" />}
+          {coverOf(track) && <img src={thumb(coverOf(track))} alt="" className="w-12 h-12 rounded-lg object-cover" />}
           <div className="min-w-0 flex-1">
             <div className="text-[11px] font-bold uppercase tracking-[0.08em] text-muted">{t("karaokeNowSinging")}</div>
             <div className="text-[length:var(--t15,15px)] font-semibold truncate">{track ? track.title : "—"}</div>

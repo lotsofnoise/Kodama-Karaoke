@@ -30,6 +30,12 @@ export function hiResThumb(url, size = 512) {
 }
 export const thumbHi = (url, size) => thumb(hiResThumb(url, size));
 
+// The cover to show for a track. A song that came through without one (an upload rather than a
+// YouTube Music release, say) still has its video's thumbnail, which YouTube keeps at a fixed
+// address for every video id; "" only when there is not even an id.
+export const coverOf = (t) => t?.thumbnail
+  || (typeof t?.videoId === "string" && /^[\w-]{11}$/.test(t.videoId) ? `https://i.ytimg.com/vi/${t.videoId}/hqdefault.jpg` : "");
+
 // The playable tracks of a playlist or album, for callers that only hold its id.
 //
 // Lives here rather than in a view because two places need it from opposite ends of the app:

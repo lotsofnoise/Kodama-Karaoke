@@ -11,7 +11,8 @@ import { startAudioLevels } from "./audioLevels.js";
 import { I18nProvider } from "@react-aria/i18n";
 import { IconContext, Minus, X, Play, Pause, House, Books, Heart, CaretLineLeft, CaretLineRight, MagnifyingGlass, Gear, Microphone, VinylRecord, MusicNote, Playlist, Shuffle, SkipBack, SkipForward, Repeat, RepeatOnce, SpeakerX, SpeakerLow, SpeakerHigh, Queue, ChatText, CaretUp, CaretDown, ArrowsIn, ArrowsOut, ArrowLeft, ArrowClockwise, Check, DotsThreeVertical, PushPin, ClockCounterClockwise, CheckCircle, Plus, DownloadSimple, Trash, PencilSimple, ArrowCircleUp, Copy, Moon, Translate, UploadSimple, WifiX, Bug, Radio, ShareNodes, ScreencastSimple, ClapperboardPlay, HeadphonesSimple, UserCircle, Users, SignOut, Power, Bell, Megaphone, MiniPlayerEnter, WaveformLines, EqualizerIcon, WarningCircle, Storefront, MicrophoneStand } from "./icons.jsx";
 
-import { API, thumb, hiResThumb, fetchCollectionTracks, LangContext, useLang, AnimationContext, useAnimations, ZoomContext, useZoom, FontScaleContext, TrackNumberContext } from "./context.jsx";
+import { NOTE_COVER } from "./ui/image-fallback.js";
+import { API, thumb, hiResThumb, coverOf, fetchCollectionTracks, LangContext, useLang, AnimationContext, useAnimations, ZoomContext, useZoom, FontScaleContext, TrackNumberContext } from "./context.jsx";
 import { CreatePlaylistModal, RenamePlaylistModal, DeletePlaylistModal } from "./modals/playlist-modals.jsx";
 import { NewsModal } from "./modals/news-modal.jsx";
 import { BugReportModal } from "./modals/bug-report-modal.jsx";
@@ -2283,7 +2284,7 @@ function Player({ track, setTrack, queue, setQueue, audioRef, isPlaying, setIsPl
       ? tr.artists.map(a => (a && a.name) || a).filter(Boolean).join(", ")
       : (tr?.artists || "");
     setNowPlaying({
-      title: tr?.title || "", artists, thumbnail: tr?.thumbnail || "",
+      title: tr?.title || "", artists, thumbnail: coverOf(tr),
       isPlaying: !!isPlaying, position: Math.floor(progress || 0), duration: Math.floor(duration || 0),
       hasTrack: !!tr, shuffle: !!shuffle, repeat: repeat || "none",
       track: tr || null,
@@ -2302,7 +2303,7 @@ function Player({ track, setTrack, queue, setQueue, audioRef, isPlaying, setIsPl
       ? tr.artists.map(a => (a && a.name) || a).filter(Boolean).join(", ")
       : (tr?.artists || "");
     const payload = {
-      title: tr?.title || "", artists, thumbnail: tr?.thumbnail || "",
+      title: tr?.title || "", artists, thumbnail: coverOf(tr),
       isPlaying: !!isPlaying, position: progress || 0, duration: Math.floor(duration || 0),
       at: Date.now(), hasTrack: !!tr,
     };
@@ -2429,9 +2430,11 @@ function Player({ track, setTrack, queue, setQueue, audioRef, isPlaying, setIsPl
             width: 72, height: 72, borderRadius: "var(--r-xl)", flexShrink: 0, overflow: "hidden", background: "var(--bg-elevated)",
             animation: anim && track ? "coverPop 0.5s cubic-bezier(0.34,1.56,0.64,1)" : "none",
           }}>
-            {track?.thumbnail
-              ? <img src={thumb(hiResThumb(track.thumbnail, 800))} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-              : <div style={{ width: "100%", height: "100%", background: track ? "var(--placeholder-gradient)" : "transparent" }} />}
+            {coverOf(track)
+              ? <img src={thumb(hiResThumb(coverOf(track), 800))} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              : track
+                ? <img src={NOTE_COVER} alt="" className="img-failed" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                : <div style={{ width: "100%", height: "100%", background: "transparent" }} />}
           </div>
           <div style={{ overflow: "hidden" }}>
             <div style={{ fontSize: "var(--t13)", fontWeight: 500, display: "flex", alignItems: "center", gap: 4, overflow: "hidden" }}>
@@ -4088,7 +4091,7 @@ export default function App() {
       else document.documentElement.style.removeProperty("--accent");
       return;
     }
-    const url = currentTrack?.thumbnail ? thumb(currentTrack.thumbnail) : null;
+    const url = coverOf(currentTrack) ? thumb(coverOf(currentTrack)) : null;
     if (!url) { document.documentElement.style.setProperty("--accent", accent); return; }
     let cancelled = false;
     const img = new Image();

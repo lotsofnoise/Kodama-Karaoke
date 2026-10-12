@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { thumb, hiResThumb, useZoom } from "../context.jsx";
+import { thumb, hiResThumb, coverOf, useZoom } from "../context.jsx";
+import { NOTE_COVER } from "../ui/image-fallback.js";
 import { ExplicitBadge } from "../ui/rows.jsx";
 import { audioLevels, acquireAudioLevels } from "../audioLevels.js";
 import { VIZ_DEFAULTS } from "../visualizer/defaults.js";
@@ -13,7 +14,7 @@ export function CoverView({ track, isPlaying, onClose, active = true, ambientVis
   // Font sizes come from tokens, so they are scaled in CSS rather than in JS. Left untouched
   // at 1 so the full-size view renders the exact same declaration it always did.
   const scaled = (v) => (scale === 1 ? v : `calc(${v} * ${scale})`);
-  const hq = hiResThumb(track.thumbnail, 800);
+  const hq = hiResThumb(coverOf(track), 800);
   const specRef = useRef(null);
   const coverRef = useRef(null);
   const playingRef = useRef(isPlaying); playingRef.current = isPlaying;
@@ -46,7 +47,7 @@ export function CoverView({ track, isPlaying, onClose, active = true, ambientVis
 
   // Extract a vibrant colour from the cover for the "dynamic" colour mode.
   useEffect(() => {
-    const url = track.thumbnail ? thumb(track.thumbnail) : null;
+    const url = coverOf(track) ? thumb(coverOf(track)) : null;
     if (!url) { coverColorRef.current = null; return; }
     const img = new Image();
     img.crossOrigin = "anonymous";
@@ -215,7 +216,7 @@ export function CoverView({ track, isPlaying, onClose, active = true, ambientVis
         }}>
           {hq
             ? <img src={thumb(hq)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-            : <div style={{ width: "100%", height: "100%", background: "var(--placeholder-gradient)" }} />
+            : <img src={NOTE_COVER} alt="" className="img-failed" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
           }
         </div>
 

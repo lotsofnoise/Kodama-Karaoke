@@ -1,7 +1,8 @@
 // Shared leaf row/card primitives used across the library/playlist/search views.
 // Extracted from App.jsx — depend only on context (thumb/animations) + icons.
 import React from "react";
-import { thumb, thumbHi, useAnimations } from "../context.jsx";
+import { thumb, thumbHi, coverOf, useAnimations } from "../context.jsx";
+import { NOTE_COVER } from "./image-fallback.js";
 import { Pause, Play, Shuffle, MusicNote } from "../icons.jsx";
 
 export function ExplicitBadge() {
@@ -69,9 +70,9 @@ export function TrackRow({ track, isPlaying, onPlay, onOpenArtist, onContextMenu
       }`}
     >
       <div className="relative w-11 h-11 shrink-0 overflow-hidden rounded-md bg-elevated">
-        {track.thumbnail
-          ? <img src={thumb(track.thumbnail)} alt="" className="w-full h-full object-cover" />
-          : <div className="w-full h-full bg-[image:var(--placeholder-gradient)]" />}
+        {coverOf(track)
+          ? <img src={thumb(coverOf(track))} alt="" className="w-full h-full object-cover" />
+          : <img src={NOTE_COVER} alt="" className="w-full h-full object-cover img-failed" />}
         {isPlaying && (
           <div className="absolute inset-0 flex items-center justify-center gap-0.5 bg-black/50">
             {anim

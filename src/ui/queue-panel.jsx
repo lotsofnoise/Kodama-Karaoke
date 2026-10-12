@@ -4,7 +4,8 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { createPortal } from "react-dom";
 import { Button, CardRoot, ChipRoot, ChipLabel, ScrollShadowRoot } from "@heroui/react";
-import { API, thumb, useLang, useAnimations, useZoom } from "../context.jsx";
+import { API, thumb, coverOf, useLang, useAnimations, useZoom } from "../context.jsx";
+import { NOTE_COVER } from "./image-fallback.js";
 import { ArrowClockwise, CaretLineUp, DotsThreeVertical, GripLines, Heart, Sliders, Trash, X } from "../icons.jsx";
 import { ExplicitBadge } from "./rows.jsx";
 import { Tooltip } from "./tooltip.jsx";
@@ -74,9 +75,9 @@ function QueueRow({ track, globalIdx, isDraggable, dimmed, isActive, isBeingDrag
 
       {/* Thumbnail */}
       <div className="w-9 h-9 shrink-0 overflow-hidden rounded-[var(--r-sm)] bg-surface-1">
-        {track.thumbnail
-          ? <img src={thumb(track.thumbnail)} alt="" className="w-full h-full object-cover" />
-          : <div className="w-full h-full bg-[image:var(--placeholder-gradient)]" />}
+        {coverOf(track)
+          ? <img src={thumb(coverOf(track))} alt="" className="w-full h-full object-cover" />
+          : <img src={NOTE_COVER} alt="" className="w-full h-full object-cover img-failed" />}
       </div>
 
       {/* Title + artist */}
@@ -426,9 +427,8 @@ export function QueuePanel({ queue: ownQueue, setQueue, currentTrack, setTrack, 
             <>
               {/* Song card */}
               <CardRoot className="flex items-center gap-3 mb-5 px-3.5 py-3">
-                {currentTrack.thumbnail && (
-                  <img src={thumb(currentTrack.thumbnail)} alt="" className="w-[52px] h-[52px] rounded-[var(--r-md)] object-cover shrink-0" />
-                )}
+                <img src={coverOf(currentTrack) ? thumb(coverOf(currentTrack)) : NOTE_COVER} alt=""
+                  className={`w-[52px] h-[52px] rounded-[var(--r-md)] object-cover shrink-0${coverOf(currentTrack) ? "" : " img-failed"}`} />
                 <div className="min-w-0">
                   <div className="text-[length:var(--t13)] font-semibold text-primary truncate">{currentTrack.title}</div>
                   <div className="text-[length:var(--t12)] text-secondary mt-0.5 truncate">{currentTrack.artists}</div>
