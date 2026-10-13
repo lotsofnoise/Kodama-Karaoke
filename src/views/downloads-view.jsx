@@ -89,6 +89,7 @@ export function DownloadsView({ onPlay, currentTrack, isPlaying, cachedSongIds, 
 
   // Header in normal flow — sits above PlaylistLayout via zIndex:5 (safe, below any overlay)
   const HEADER_H = 60; // 24px top padding + 36px row height
+  const HEADER_GAP = 20; // clear space between the tab bar and the artwork below it
   const tabBar = (
     <div style={{ position: "relative", zIndex: 5, flexShrink: 0, padding: "24px 24px 0" }}>
       <div style={{ position: "relative", display: "flex", alignItems: "center", height: 36 }}>
@@ -115,8 +116,9 @@ export function DownloadsView({ onPlay, currentTrack, isPlaying, cachedSongIds, 
     return (
       <div style={{ minHeight: "100%", display: "flex", flexDirection: "column" }}>
         {tabBar}
-        {/* Negative margin pulls PlaylistLayout's gradient up behind the header */}
-        <div style={{ marginTop: -HEADER_H, flex: 1 }}>
+        {/* Negative margin pulls PlaylistLayout's gradient up behind the header - all but
+            HEADER_GAP of it, so the artwork does not sit right under the tab bar. */}
+        <div style={{ marginTop: -HEADER_H + HEADER_GAP, flex: 1 }}>
           <PlaylistLayout
             title={t("downloads")}
             thumbnail={songs[0]?.thumbnail || null}
