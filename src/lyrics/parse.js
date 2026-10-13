@@ -194,6 +194,10 @@ function ttmlTimeToSeconds(t) {
 
 function parseDurationToSeconds(str) {
   if (!str) return null;
+  // Some songs carry their length as a plain number of seconds (Listen Together room songs, for
+  // one); str.split then threw, and took the lyrics lookup for that song down with it.
+  if (typeof str === "number") return str > 0 && isFinite(str) ? str : null;
+  if (typeof str !== "string") return null;
   const parts = str.split(":").map(Number);
   if (parts.length === 2) return parts[0] * 60 + parts[1];
   if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];

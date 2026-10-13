@@ -12,6 +12,7 @@ import { I18nProvider } from "@react-aria/i18n";
 import { IconContext, Minus, X, Play, Pause, House, Books, Heart, CaretLineLeft, CaretLineRight, MagnifyingGlass, Gear, Microphone, VinylRecord, MusicNote, Playlist, Shuffle, SkipBack, SkipForward, Repeat, RepeatOnce, SpeakerX, SpeakerLow, SpeakerHigh, Queue, ChatText, CaretUp, CaretDown, ArrowsIn, ArrowsOut, ArrowLeft, ArrowClockwise, Check, DotsThreeVertical, PushPin, ClockCounterClockwise, CheckCircle, Plus, DownloadSimple, Trash, PencilSimple, ArrowCircleUp, Copy, Moon, Translate, UploadSimple, WifiX, Bug, Radio, ShareNodes, ScreencastSimple, ClapperboardPlay, HeadphonesSimple, UserCircle, Users, SignOut, Power, Bell, Megaphone, MiniPlayerEnter, WaveformLines, EqualizerIcon, WarningCircle, Storefront, MicrophoneStand } from "./icons.jsx";
 
 import { NOTE_COVER } from "./ui/image-fallback.js";
+import { durationSecondsOf, rememberDuration, rememberMeta, withMeta, isIncomplete, useKnownDurations } from "./durations.js";
 import { API, thumb, hiResThumb, coverOf, fetchCollectionTracks, LangContext, useLang, AnimationContext, useAnimations, ZoomContext, useZoom, FontScaleContext, TrackNumberContext } from "./context.jsx";
 import { CreatePlaylistModal, RenamePlaylistModal, DeletePlaylistModal } from "./modals/playlist-modals.jsx";
 import { NewsModal } from "./modals/news-modal.jsx";
@@ -69,7 +70,7 @@ import { DownloadsView } from "./views/downloads-view.jsx";
 import { HistoryView } from "./views/history-view.jsx";
 import { AddToPlaylistModal } from "./modals/add-to-playlist-modal.jsx";
 import { particleBurst, dissolve } from "./effects/particle-burst.js";
-import { setNowPlaying, registerPlayerAction, registerAudio, registerPlayHandler } from "./now-playing.js";
+import { setNowPlaying, registerPlayerAction, registerAudio, registerPlayHandler, getAudio } from "./now-playing.js";
 import { emitNowPlaying, openMiniPlayer, EV_HELLO, EV_SHOW_MAIN } from "./miniplayer/bridge.js";
 import { shuffled } from "./shuffle.js";
 import { STATS_URL } from "./stats-endpoint.js";
@@ -1577,6 +1578,7 @@ function Player({ track, setTrack, queue, setQueue, audioRef, isPlaying, setIsPl
   // One liked state for the whole app (App's likedIds): the heart here, on rows and in menus
   // always agree, and a like from here shows up in an open Liked Songs list at once.
   const isLiked = !!(track?.videoId && likedIds?.has(track.videoId));
+  useKnownDurations();   // details found for the playing song (artists, album) show at once
   const [likePulsing, setLikePulsing] = useState(false);
   const [prevBouncing, setPrevBouncing] = useState(false);
   const [nextBouncing, setNextBouncing] = useState(false);
@@ -2015,9 +2017,18 @@ function Player({ track, setTrack, queue, setQueue, audioRef, isPlaying, setIsPl
 
     // IpcAudio may return 0 when Rust can't determine duration from metadata;
     // fall back to the track's formatted duration string in that case.
+    // A song whose data came without a length: remember the one the audio has, so lists, totals
+    // and the scrobble point have it too (see durations.js).
+    const noteMeasuredLength = () => {
+      const tr = trackRef.current;
+      if (!tr?.videoId || a.__kodamaVid !== tr.videoId || !(a.duration > 0) || !isFinite(a.duration)) return;
+      if (durationSecondsOf({ duration: tr.duration })) return;   // it has its own
+      rememberDuration(tr.videoId, a.duration);
+    };
     const onDur = () => {
-      const d = a.duration > 0 ? a.duration : (parseDurationToSeconds(track?.duration) || 0);
+      const d = a.duration > 0 ? a.duration : durationSecondsOf(track);
       setDuration(d);
+      noteMeasuredLength();
     };
 
     const onEnd = () => {
@@ -2051,6 +2062,7 @@ function Player({ track, setTrack, queue, setQueue, audioRef, isPlaying, setIsPl
         // Rides along with the existing throttle rather than opening its own timer — an extra
         // periodic job in the player is exactly what caused the 15s stutter once before.
         setBuffered(a.bufferedFraction ?? null);
+        noteMeasuredLength();
       }
 
       if (!a.duration) return;
@@ -4150,13 +4162,25 @@ export default function App() {
   // What gets scrobbled runs through the rules from issue #16: the primary-artist setting and
   // any per-track correction. Read at send time rather than held in state, so a correction made
   // while a track is playing applies to that track's own scrobble.
-  const lfmMeta = (tr) => ({
-    ...resolveScrobbleMeta(tr, {
-      primaryOnly: loadPrimaryArtistOnly(),
-      overrides: loadOverrides(),
-    }),
-    duration: parseDurationToSeconds(tr?.duration) || 0,
-  });
+  const lfmMeta = (raw) => {
+    const tr = withMeta(raw);   // length, album and artists it came without, if found since
+    // Artists and album as text, whatever shape they came in (a list of artists made the check
+    // throw every second, and that song never scrobbled).
+    const artists = Array.isArray(tr?.artists)
+      ? tr.artists.map(a => (a && a.name) || a).filter(Boolean).join(", ")
+      : (typeof tr?.artists === "string" ? tr.artists : "");
+    const album = typeof tr?.album === "string" ? tr.album : (tr?.album?.name || "");
+    const own = durationSecondsOf(tr);
+    const a = getAudio();
+    const measured = a && a.__kodamaVid === tr?.videoId && a.duration > 0 && isFinite(a.duration) ? a.duration : 0;
+    return {
+      ...resolveScrobbleMeta({ ...tr, artists, album }, {
+        primaryOnly: loadPrimaryArtistOnly(),
+        overrides: loadOverrides(),
+      }),
+      duration: Math.round(own || measured),
+    };
+  };
   const lfmPost = (path, body) => {
     if (!lastfmConnectedRef.current) return;
     fetch(`${API}/lastfm/${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => {});
@@ -4219,6 +4243,7 @@ export default function App() {
       const threshold = Math.min(m.duration / 2, 240); // >50% or >4min
       if (st.played >= threshold && m.artist && m.track) {
         st.scrobbled = true;
+        console.log(`[lastfm] scrobble: ${m.artist} - ${m.track} (${st.played}s of ${m.duration}s)`);
         lfmPost("scrobble", { ...m, timestamp: st.startTs || Math.floor(Date.now() / 1000) - st.played });
       }
     }, 1000);
@@ -4241,7 +4266,9 @@ export default function App() {
       const st = ytHistoryRef.current;
       if (!st.videoId || st.sent) return;
       st.played += 1;
-      const duration = parseDurationToSeconds(currentTrack?.duration) || 0;
+      const a = getAudio();
+      const measured = a && a.__kodamaVid === currentTrack?.videoId && a.duration > 0 && isFinite(a.duration) ? a.duration : 0;
+      const duration = durationSecondsOf(currentTrack) || measured;
       if (duration < 30) return;
       const threshold = Math.min(duration / 2, 240); // >50% or >4min
       if (st.played >= threshold) {
@@ -4782,6 +4809,42 @@ export default function App() {
     }, 5000);
     return () => clearTimeout(id);
   }, [currentTrack, isPlaying]);
+
+  // A playing song that came without its length, album or artists (the "All" search tab, radio
+  // and autoplay picks, uploads): ask the server for the full details - what the Songs search tab
+  // shows - and complete it in the player, the queue, History and the Last.fm scrobble. The song
+  // object itself is completed in place, so the player does not reload what it is playing.
+  useEffect(() => {
+    const tr = currentTrack;
+    if (!tr?.videoId || !isIncomplete(tr)) return;
+    let cancelled = false;
+    const vid = tr.videoId;
+    const t0 = setTimeout(() => {
+      fetch(`${API}/song/meta/${encodeURIComponent(vid)}?full=1`)
+        .then(r => (r.ok ? r.json() : null))
+        .then(meta => {
+          if (cancelled || !meta || meta.error) return;
+          rememberMeta(vid, meta);
+          const fill = (x) => (x && x.videoId === vid ? withMeta(x) : x);
+          const done = withMeta(tr);
+          ["duration", "album", "albumBrowseId", "artists", "artistLinks", "artistBrowseId"].forEach(k => {
+            if (done[k] !== undefined && done[k] !== tr[k]) tr[k] = done[k];
+          });
+          setQueue(q => (q.some(x => x.videoId === vid && isIncomplete(x)) ? q.map(fill) : q));
+          try {
+            const key = `kiyoshi-history-${window.__activeProfile || "default"}`;
+            const stored = JSON.parse(localStorage.getItem(key) || "[]");
+            if (stored.some(x => x?.videoId === vid && isIncomplete(x))) {
+              localStorage.setItem(key, JSON.stringify(stored.map(fill)));
+              window.dispatchEvent(new Event("kiyoshi-history-updated"));
+            }
+          } catch { /* History stays as it was */ }
+          console.log(`[meta] completed ${done.artists || "?"} - ${done.title || vid}: ${done.duration || "no length"}, ${done.album || "no album"}`);
+        })
+        .catch(() => {});
+    }, 300);
+    return () => { cancelled = true; clearTimeout(t0); };
+  }, [currentTrack?.videoId]); // eslint-disable-line react-hooks/exhaustive-deps
   // Live Karaoke Room guests load the host's song through this (src/karaoke/sync.js).
   useEffect(() => { registerPlayHandler(handlePlay); }, [handlePlay]);
 

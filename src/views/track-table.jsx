@@ -5,6 +5,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { Button } from "@heroui/react";
 import { thumb, hiResThumb, coverOf, useLang, useAnimations, useTrackNumbers } from "../context.jsx";
 import { NOTE_COVER } from "../ui/image-fallback.js";
+import { durationOf, durationSecondsOf, useKnownDurations, withMeta } from "../durations.js";
 import { useAccentColor } from "../ui/use-accent-color.js";
 import { Tooltip } from "../ui/tooltip.jsx";
 import { ProgressToast } from "../ui/progress-toast.jsx";
@@ -63,7 +64,7 @@ const POSTER_H = 400;
 const COLLAPSE_DIST = POSTER_H - BAND_TOP - CARD_H;
 
 function formatTotalDuration(tracks) {
-  const totalSecs = tracks.reduce((sum, t) => sum + (parseDurationToSeconds(t.duration) || 0), 0);
+  const totalSecs = Math.round(tracks.reduce((sum, t) => sum + durationSecondsOf(t), 0));
   if (totalSecs <= 0) return null;
   const h = Math.floor(totalSecs / 3600);
   const m = Math.floor((totalSecs % 3600) / 60);
@@ -156,7 +157,9 @@ function RowIconButton({ title, onClick, className = "", children }) {
   );
 }
 
-export function TableRow({ track, index, isPlaying, onPlay, onOpenArtist, onOpenAlbum, isAlbum, onContextMenu, isCached, isDownloading, onDownload, isPremiumOnly, selected = false, onToggleSelect, isLiked = false, onToggleLike, menuOpen = false }) {
+export function TableRow({ track: rawTrack, index, isPlaying, onPlay, onOpenArtist, onOpenAlbum, isAlbum, onContextMenu, isCached, isDownloading, onDownload, isPremiumOnly, selected = false, onToggleSelect, isLiked = false, onToggleLike, menuOpen = false }) {
+  useKnownDurations();   // details found later (length, album, artists) fill in here
+  const track = withMeta(rawTrack);
   const anim = useAnimations();
   const t = useLang();
   const showNum = useTrackNumbers();
@@ -266,7 +269,7 @@ export function TableRow({ track, index, isPlaying, onPlay, onOpenArtist, onOpen
       {/* Duration — centred, so the times sit directly under the clock in the header rather
           than being pushed to the column edge while the narrow icon floats above their end. */}
       <div className="text-[length:var(--t12)] text-muted text-center tabular-nums">
-        {track.duration || "—"}
+        {durationOf(track) || "—"}
       </div>
       {/* Selection — last column, so the title side stays undisturbed */}
       {onToggleSelect && (
@@ -344,6 +347,7 @@ export function PlaylistLayout({ title, description, thumbnail, tracks, total, l
     });
   }, [tracks, trackSearch, hideExplicit, sort, collator]);
 
+  useKnownDurations();   // the total follows newly measured lengths
   const totalDuration = formatTotalDuration(tracks);
   const skeletonCount = total ? Math.max(0, total - tracks.length) : 0;
 

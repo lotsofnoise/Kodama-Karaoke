@@ -3,6 +3,7 @@
 import React from "react";
 import { thumb, thumbHi, coverOf, useAnimations } from "../context.jsx";
 import { NOTE_COVER } from "./image-fallback.js";
+import { durationOf, useKnownDurations, withMeta } from "../durations.js";
 import { Pause, Play, Shuffle, MusicNote } from "../icons.jsx";
 
 export function ExplicitBadge() {
@@ -59,7 +60,9 @@ function formatDuration(str) {
   return str;
 }
 
-export function TrackRow({ track, isPlaying, onPlay, onOpenArtist, onContextMenu }) {
+export function TrackRow({ track: rawTrack, isPlaying, onPlay, onOpenArtist, onContextMenu }) {
+  useKnownDurations();   // details found later (length, album, artists) fill in here
+  const track = withMeta(rawTrack);
   const anim = useAnimations();
   return (
     <div
@@ -98,7 +101,7 @@ export function TrackRow({ track, isPlaying, onPlay, onOpenArtist, onContextMenu
         </div>
       </div>
       <div className="text-[length:var(--t12)] text-muted shrink-0">
-        {formatDuration(track.duration)}
+        {formatDuration(durationOf(track))}
       </div>
     </div>
   );

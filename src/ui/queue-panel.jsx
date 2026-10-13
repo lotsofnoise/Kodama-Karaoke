@@ -6,6 +6,7 @@ import { createPortal } from "react-dom";
 import { Button, CardRoot, ChipRoot, ChipLabel, ScrollShadowRoot } from "@heroui/react";
 import { API, thumb, coverOf, useLang, useAnimations, useZoom } from "../context.jsx";
 import { NOTE_COVER } from "./image-fallback.js";
+import { durationOf, useKnownDurations, withMeta } from "../durations.js";
 import { ArrowClockwise, CaretLineUp, DotsThreeVertical, GripLines, Heart, Sliders, Trash, X } from "../icons.jsx";
 import { ExplicitBadge } from "./rows.jsx";
 import { Tooltip } from "./tooltip.jsx";
@@ -54,7 +55,9 @@ function QueueIconButton({ label, onClick, className = "", children }) {
 
 // labels defaults to {} so a call site that forgets to pass it loses the button's accessible
 // name — which the console already warns about — instead of taking the whole app down.
-function QueueRow({ track, globalIdx, isDraggable, dimmed, isActive, isBeingDragged, onPointerDown, onPlay, isLiked, onToggleLike, onOpenMenu, menuOpen, fadeSecs, onRemove, labels = {} }) {
+function QueueRow({ track: rawTrack, globalIdx, isDraggable, dimmed, isActive, isBeingDragged, onPointerDown, onPlay, isLiked, onToggleLike, onOpenMenu, menuOpen, fadeSecs, onRemove, labels = {} }) {
+  useKnownDurations();   // details found later (length, album, artists) fill in here
+  const track = withMeta(rawTrack);
   const rowRef = useRef(null);
   return (
     <div
@@ -104,8 +107,8 @@ function QueueRow({ track, globalIdx, isDraggable, dimmed, isActive, isBeingDrag
 
       {/* Duration */}
       {/* A plain `track.duration &&` rendered a literal 0 for a song whose length is unknown. */}
-      {track.duration ? (
-        <div className="shrink-0 min-w-[28px] text-[length:var(--t11)] text-muted text-right">{track.duration}</div>
+      {durationOf(track) ? (
+        <div className="shrink-0 min-w-[28px] text-[length:var(--t11)] text-muted text-right">{durationOf(track)}</div>
       ) : null}
 
       {/* Remove: only where the menu is not available (a ListenTogether listener's own song) */}

@@ -4327,6 +4327,10 @@ def song_meta(video_id):
     """Minimal track metadata for a videoId — used to turn a shared kodama://song/<id>
     deep link into a playable track object on the frontend."""
     try:
+        # ?full=1: the player asking for what a playing song came without (album, artists,
+        # length), the same details the Songs search tab shows. Without it: the deep-link shape.
+        if request.args.get("full") == "1":
+            return jsonify({"videoId": video_id, **_track_meta(video_id)})
         info = get_ytmusic().get_song(video_id) or {}
         vd = info.get("videoDetails", {}) or {}
         thumbs = ((vd.get("thumbnail") or {}).get("thumbnails") or [])
@@ -4541,10 +4545,95 @@ def _map_search_song(t):
         "artistLinks": _artist_links(artist_list),
         "album": album.get("name", ""),
         "albumBrowseId": (album.get("id") or ""),
-        "duration": t.get("duration", ""),
+        "duration": t.get("duration") or _fmt_length(t.get("duration_seconds")),
         "thumbnail": _pick_thumb(t.get("thumbnails", [])),
         "isExplicit": bool(t.get("isExplicit", False)),
     }
+
+def _fmt_length(secs):
+    """3:15 / 1:02:03 from seconds; "" when there are none."""
+    try:
+        secs = int(secs or 0)
+    except (TypeError, ValueError):
+        return ""
+    if secs <= 0:
+        return ""
+    h, rest = divmod(secs, 3600)
+    m, s = divmod(rest, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+_song_meta_cache = {}
+
+def _track_meta(video_id):
+    """A song's full details from YouTube Music: title, artists, album and length.
+
+    YouTube's mixed results (the "All" search tab, its top result especially, radio and
+    autoplay picks) often leave the length, the album or the artists out, while the same song
+    under the Songs filter has them. A song played from there went into the player, History
+    and Last.fm incomplete - and with no length there is no halfway point, so it was never
+    scrobbled. The watch playlist for the song carries what the Songs tab shows; get_song fills
+    in the length (and the uploader as the artist) for an upload that has no music entry.
+    An upload that is not a release has no album anywhere on YouTube, so none is made up.
+    Remembered per video, so each song is looked up once."""
+    import re
+    if not video_id:
+        return {}
+    hit = _song_meta_cache.get(video_id)
+    if hit is not None:
+        return hit
+    meta = {}
+    try:
+        wp = get_ytmusic().get_watch_playlist(videoId=video_id, limit=1) or {}
+        first = next((t for t in (wp.get("tracks") or []) if t.get("videoId") == video_id), None)
+        if first:
+            artist_list = first.get("artists") or []
+            album = first.get("album") if isinstance(first.get("album"), dict) else {}
+            meta = {
+                "title": first.get("title") or "",
+                "artists": _artist_names(artist_list),
+                "artistLinks": _artist_links(artist_list),
+                "artistBrowseId": (artist_list[0].get("id") or "") if artist_list and isinstance(artist_list[0], dict) else "",
+                "album": album.get("name") or "",
+                "albumBrowseId": album.get("id") or "",
+                "duration": first.get("length") or _fmt_length(first.get("duration_seconds")),
+            }
+    except Exception as e:
+        _logging.info(f"[meta] watch playlist for {video_id} failed: {e}")
+    if not meta.get("duration") or not meta.get("artists"):
+        try:
+            vd = (get_ytmusic().get_song(video_id) or {}).get("videoDetails", {}) or {}
+            if not meta.get("duration"):
+                meta["duration"] = _fmt_length(vd.get("lengthSeconds"))
+            if not meta.get("artists") and vd.get("author"):
+                meta["artists"] = re.sub(r"\s*-\s*Topic$", "", vd.get("author") or "").strip()
+            if not meta.get("title"):
+                meta["title"] = vd.get("title") or ""
+        except Exception as e:
+            _logging.info(f"[meta] get_song for {video_id} failed: {e}")
+    meta = {k: v for k, v in meta.items() if v}
+    if meta:
+        if len(_song_meta_cache) > 5000:
+            _song_meta_cache.clear()
+        _song_meta_cache[video_id] = meta
+    return meta
+
+_META_FIELDS = ("duration", "album", "albumBrowseId", "artists", "artistLinks", "artistBrowseId")
+
+def _fill_missing_meta(items, limit=8):
+    """Fill in the length, album and artists of songs that came without them (see _track_meta).
+    A few songs per list at most, looked up side by side so a search stays quick."""
+    missing = [it for it in items if it.get("type") == "song" and it.get("videoId")
+               and (not it.get("duration") or not it.get("album") or not it.get("artists"))][:limit]
+    if not missing:
+        return items
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        metas = list(ex.map(lambda it: _track_meta(it["videoId"]), missing))
+    for it, meta in zip(missing, metas):
+        for k in _META_FIELDS:
+            if not it.get(k) and meta.get(k):
+                it[k] = meta[k]
+    return items
 
 def _map_search_artist(t):
     return {
@@ -4626,6 +4715,7 @@ def search():
                 if it.get("videoId") or it.get("browseId"):
                     items.append(it)
 
+        _fill_missing_meta(items)
         return jsonify({"results": items})
     except Exception as e:
         import traceback
