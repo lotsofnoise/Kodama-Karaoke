@@ -1,4 +1,4 @@
-// Correcting what Last.fm records for one track.
+// Correcting what ListenBrainz records for one track.
 //
 // The fields open filled with what would actually be sent right now, rules already applied,
 // rather than with the raw metadata: the point of a correction is to change the outcome, and a

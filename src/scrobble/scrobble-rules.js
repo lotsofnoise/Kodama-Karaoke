@@ -59,7 +59,7 @@ export function savePrimaryArtistOnly(on) {
   try { localStorage.setItem(PRIMARY_KEY, String(!!on)); } catch { /* private window */ }
 }
 
-/** The artist Last.fm should see, given the setting. */
+/** The artist ListenBrainz should see, given the setting. */
 export function primaryArtist(track) {
   const joined = (track?.artists || "").replace(/\s*-\s*Topic$/i, "").trim();
   // The structured list is what YouTube Music itself distinguishes artists by, so it never

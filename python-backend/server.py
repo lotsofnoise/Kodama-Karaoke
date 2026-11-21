@@ -268,115 +268,120 @@ IMG_CACHE_DIR = os.path.join(_base_dir, "imgcache")
 os.makedirs(IMG_CACHE_DIR, exist_ok=True)
 IMG_CACHE_TTL = 30 * 24 * 3600  # 30 days
 
-# ─── Last.fm integration ─────────────────────────────────────────────────────
-# API key + shared secret: env vars first, then a local (git-ignored)
-# lastfm_config.json in the data dir. Features are disabled if unset.
-LASTFM_API_KEY = os.environ.get("LASTFM_API_KEY", "")
-LASTFM_API_SECRET = os.environ.get("LASTFM_API_SECRET", "")
-if not (LASTFM_API_KEY and LASTFM_API_SECRET):
-    # Same resolution as the feedback webhook: in a PyInstaller build the config is bundled (see
-    # the .spec) and extracted to sys._MEIPASS; in dev it sits next to this file. NOT _base_dir —
-    # that points at the user data dir when frozen, where the config isn't. CI writes it from a secret.
-    _lf_candidates = []
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        _lf_candidates.append(os.path.join(sys._MEIPASS, "lastfm_config.json"))
-    _lf_candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "lastfm_config.json"))
-    for _lf_path in _lf_candidates:
-        try:
-            if os.path.exists(_lf_path):
-                with open(_lf_path, encoding="utf-8") as _lf:
-                    _lfc = json.load(_lf)
-                    LASTFM_API_KEY = LASTFM_API_KEY or _lfc.get("api_key", "")
-                    LASTFM_API_SECRET = LASTFM_API_SECRET or _lfc.get("api_secret", "")
-                break
-        except Exception:
-            pass
+# ─── ListenBrainz ────────────────────────────────────────────────────────────
+# Listens go to ListenBrainz (listenbrainz.org, run by the MetaBrainz Foundation). Nothing about
+# it is secret on Kodama's side: each person connects with their own user token, copied from
+# listenbrainz.org/settings, and that token is kept in their profile like any other setting.
+LISTENBRAINZ_API = "https://api.listenbrainz.org/1/"
+LISTENBRAINZ_QUEUE_MAX = 500
+_lb_lock = threading.Lock()
 
-LASTFM_API_ROOT = "https://ws.audioscrobbler.com/2.0/"
-
-# Kodama Karaoke: without a local key + secret, requests can instead be signed by a small
-# online service that keeps the secret (lastfm-signer/, a Cloudflare Worker). Its address is
-# not secret: env var LASTFM_SIGNER_URL, else lastfm_signer.json ({"url": "https://..."}),
-# looked up like lastfm_config.json and bundled into the server build by the .spec files.
-LASTFM_SIGNER_URL = os.environ.get("LASTFM_SIGNER_URL", "").strip()
-if not LASTFM_SIGNER_URL:
-    _ls_candidates = []
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        _ls_candidates.append(os.path.join(sys._MEIPASS, "lastfm_signer.json"))
-    _ls_candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "lastfm_signer.json"))
-    for _ls_path in _ls_candidates:
-        try:
-            if os.path.exists(_ls_path):
-                with open(_ls_path, encoding="utf-8") as _ls:
-                    LASTFM_SIGNER_URL = str(json.load(_ls).get("url", "")).strip()
-                break
-        except Exception:
-            pass
-LASTFM_SIGNER_URL = LASTFM_SIGNER_URL.rstrip("/")
-_lastfm_signer_key = {"key": ""}   # api_key as reported by the signer (cached)
-
-def _lastfm_local():
-    return bool(LASTFM_API_KEY and LASTFM_API_SECRET)
-
-def _lastfm_enabled():
-    return _lastfm_local() or bool(LASTFM_SIGNER_URL)
-
-def _lastfm_public_key():
-    """The API key for the sign-in URL: the local one, or the signer's."""
-    if _lastfm_local():
-        return LASTFM_API_KEY
-    if not _lastfm_signer_key["key"] and LASTFM_SIGNER_URL:
-        try:
-            r = requests.get(f"{LASTFM_SIGNER_URL}/key", timeout=10)
-            _lastfm_signer_key["key"] = (r.json() or {}).get("api_key", "")
-        except Exception:
-            pass
-    return _lastfm_signer_key["key"]
-
-def _lastfm_remote_sign(p):
-    """Ask the signer to sign request params. Returns (api_key, api_sig) or raises."""
-    r = requests.post(f"{LASTFM_SIGNER_URL}/sign", json={"params": p}, timeout=10)
-    d = r.json() if r.content else {}
-    if r.status_code != 200 or not d.get("api_sig"):
-        raise RuntimeError(d.get("error") or f"signer_http_{r.status_code}")
-    _lastfm_signer_key["key"] = d.get("api_key", "") or _lastfm_signer_key["key"]
-    return d["api_key"], d["api_sig"]
-
-def _lastfm_sign(params):
-    """api_sig = md5 of sorted 'key+value' pairs (excl. format/callback) + secret."""
-    import hashlib
-    raw = "".join(f"{k}{params[k]}" for k in sorted(params) if k not in ("format", "callback"))
-    return hashlib.md5((raw + LASTFM_API_SECRET).encode("utf-8")).hexdigest()
-
-def _lastfm_call(method, params=None, http="GET", signed=False):
-    """Call a Last.fm API method. Returns (ok: bool, data_or_error: dict)."""
-    if not _lastfm_enabled():
-        return False, {"error": "lastfm_not_configured"}
-    p = dict(params or {})
-    p["method"] = method
+def _lb_request(path, token, body=None):
+    """Call the ListenBrainz API. Returns (status_code, json_or_empty_dict); raises on no network."""
+    headers = {"Authorization": f"Token {token}"}
+    if body is not None:
+        r = requests.post(LISTENBRAINZ_API + path, json=body, headers=headers, timeout=15)
+    else:
+        r = requests.get(LISTENBRAINZ_API + path, headers=headers, timeout=15)
     try:
-        if _lastfm_local():
-            p["api_key"] = LASTFM_API_KEY
-            if signed:
-                p["api_sig"] = _lastfm_sign(p)
-        elif signed:
-            p["api_key"], p["api_sig"] = _lastfm_remote_sign(p)
-        else:
-            p["api_key"] = _lastfm_public_key()
-    except Exception as e:
-        return False, {"error": "signer_unavailable", "message": str(e)}
-    p["format"] = "json"
-    try:
-        if http == "POST":
-            r = requests.post(LASTFM_API_ROOT, data=p, timeout=15)
-        else:
-            r = requests.get(LASTFM_API_ROOT, params=p, timeout=15)
         data = r.json() if r.content else {}
-        if isinstance(data, dict) and data.get("error"):
-            return False, data
-        return True, data
+    except Exception:
+        data = {}
+    return r.status_code, (data if isinstance(data, dict) else {})
+
+def _lb_queue_path():
+    return os.path.join(PROFILES_DIR, f"{_current_profile or 'default'}.listenbrainz-queue.json")
+
+def _lb_read_queue():
+    try:
+        with open(_lb_queue_path(), encoding="utf-8") as f:
+            q = json.load(f)
+            return q if isinstance(q, list) else []
+    except Exception:
+        return []
+
+def _lb_write_queue(q):
+    try:
+        with open(_lb_queue_path(), "w", encoding="utf-8") as f:
+            json.dump(q[-LISTENBRAINZ_QUEUE_MAX:], f, ensure_ascii=False)
     except Exception as e:
-        return False, {"error": str(e)}
+        _logging.warning(f"[listenbrainz] could not save the queue: {e}")
+
+def _lb_flush(token):
+    """Send every listen waiting in the queue.
+
+    A listen that could not be sent (no connection, ListenBrainz down or busy) waits here and goes
+    out with the next one, or the next time Kodama connects - a dropped connection or a restart
+    does not lose it. ListenBrainz takes listens up to years late, stamped with when they happened.
+    Returns "ok", "offline", or "invalid_token"."""
+    with _lb_lock:
+        q = _lb_read_queue()
+        while q:
+            batch = q[:100]
+            try:
+                status, data = _lb_request("submit-listens", token, {
+                    "listen_type": "single" if len(batch) == 1 else "import",
+                    "payload": batch,
+                })
+            except Exception as e:
+                _logging.info(f"[listenbrainz] offline, {len(q)} listen(s) waiting: {e}")
+                _lb_write_queue(q)
+                return "offline"
+            if status == 200:
+                q = q[len(batch):]
+                continue
+            if status == 401:
+                _lb_write_queue(q)
+                return "invalid_token"
+            if status == 400:
+                # ListenBrainz refused the content itself; sending it again would be refused again,
+                # forever, and hold up everything behind it. One by one, so only the bad one goes.
+                _logging.warning(f"[listenbrainz] refused: {data.get('error') or data}")
+                if len(batch) > 1:
+                    keep = []
+                    for listen in batch:
+                        try:
+                            st, _ = _lb_request("submit-listens", token, {"listen_type": "single", "payload": [listen]})
+                        except Exception:
+                            keep.append(listen)
+                            continue
+                        if st not in (200, 400):
+                            keep.append(listen)
+                    q = keep + q[len(batch):]
+                    if keep:
+                        _lb_write_queue(q)
+                        return "offline"
+                else:
+                    q = q[1:]
+                continue
+            # 429 (too many requests) or a server error: try again later.
+            _logging.info(f"[listenbrainz] HTTP {status}, {len(q)} listen(s) waiting")
+            _lb_write_queue(q)
+            return "offline"
+        _lb_write_queue([])
+        return "ok"
+
+def _lb_track_metadata(d):
+    """ListenBrainz's track_metadata from what the player sends: artist, track, album, length."""
+    extra = {
+        "media_player": "Kodama",
+        "submission_client": "Kodama Karaoke",
+        "music_service": "music.youtube.com",
+    }
+    if d.get("clientVersion"):
+        extra["submission_client_version"] = str(d["clientVersion"])
+    if d.get("videoId"):
+        extra["origin_url"] = f"https://music.youtube.com/watch?v={d['videoId']}"
+    try:
+        secs = float(d.get("duration") or 0)
+        if secs > 0:
+            extra["duration_ms"] = int(round(secs * 1000))
+    except Exception:
+        pass
+    meta = {"artist_name": d.get("artist", ""), "track_name": d.get("track", ""), "additional_info": extra}
+    if d.get("album"):
+        meta["release_name"] = d["album"]
+    return meta
 
 def _active_meta_path():
     return os.path.join(PROFILES_DIR, f"{_current_profile or 'default'}.meta.json")
@@ -1508,93 +1513,91 @@ def set_profile_avatar():
         json.dump(meta, f)
     return jsonify({"ok": True})
 
-# ─── Last.fm endpoints ───────────────────────────────────────────────────────
-@app.route("/lastfm/status")
-def lastfm_status():
+# ─── ListenBrainz endpoints ──────────────────────────────────────────────────
+@app.route("/listenbrainz/status")
+def listenbrainz_status():
     meta = _read_active_meta()
+    token = meta.get("listenbrainz_token", "")
     return jsonify({
-        "enabled": _lastfm_enabled(),
-        "connected": bool(meta.get("lastfm_session")),
-        "username": meta.get("lastfm_user", ""),
+        "connected": bool(token),
+        "username": meta.get("listenbrainz_user", ""),
+        "pending": len(_lb_read_queue()),
     })
 
-@app.route("/lastfm/connect")
-def lastfm_connect():
-    # Desktop auth step 1: get a request token + the URL the user opens to authorize.
-    if not _lastfm_enabled():
-        return jsonify({"error": "lastfm_not_configured"}), 400
-    ok, data = _lastfm_call("auth.getToken", signed=True)
-    if not ok:
-        return jsonify({"error": data.get("message", "token_failed")}), 500
-    token = data.get("token", "")
-    return jsonify({
-        "token": token,
-        "authUrl": f"https://www.last.fm/api/auth/?api_key={_lastfm_public_key()}&token={token}",
-    })
-
-@app.route("/lastfm/session", methods=["POST"])
-def lastfm_session():
-    # Desktop auth step 2: exchange the authorized token for a permanent session key.
-    token = (request.json or {}).get("token", "")
+@app.route("/listenbrainz/connect", methods=["POST"])
+def listenbrainz_connect():
+    """Check a user token with ListenBrainz and keep it in the active profile."""
+    token = str((request.json or {}).get("token", "")).strip()
     if not token:
         return jsonify({"error": "missing_token"}), 400
-    ok, data = _lastfm_call("auth.getSession", {"token": token}, signed=True)
-    if not ok:
-        return jsonify({"error": data.get("message", "session_failed")}), 400
-    sess = data.get("session", {})
+    try:
+        status, data = _lb_request("validate-token", token)
+    except Exception as e:
+        return jsonify({"error": "unreachable", "message": str(e)}), 502
+    if status != 200 or not data.get("valid"):
+        return jsonify({"error": "invalid_token"}), 400
     meta = _read_active_meta()
-    meta["lastfm_session"] = sess.get("key", "")
-    meta["lastfm_user"] = sess.get("name", "")
+    meta["listenbrainz_token"] = token
+    meta["listenbrainz_user"] = data.get("user_name", "")
     _write_active_meta(meta)
-    return jsonify({"connected": True, "username": sess.get("name", "")})
+    threading.Thread(target=_lb_flush, args=(token,), daemon=True).start()
+    return jsonify({"connected": True, "username": data.get("user_name", "")})
 
-@app.route("/lastfm/disconnect", methods=["POST"])
-def lastfm_disconnect():
+@app.route("/listenbrainz/disconnect", methods=["POST"])
+def listenbrainz_disconnect():
     meta = _read_active_meta()
-    meta.pop("lastfm_session", None)
-    meta.pop("lastfm_user", None)
+    meta.pop("listenbrainz_token", None)
+    meta.pop("listenbrainz_user", None)
     _write_active_meta(meta)
+    _lb_write_queue([])
     return jsonify({"connected": False})
 
-def _lastfm_track_action(method, http="POST", extra=None):
-    """Shared handler for now-playing / scrobble / love / unlove."""
-    meta = _read_active_meta()
-    sk = meta.get("lastfm_session")
-    if not sk:
-        return jsonify({"error": "not_connected"}), 400
+def _lb_from_request():
+    """(token, data) for a player request, or an error response."""
+    token = _read_active_meta().get("listenbrainz_token", "")
+    if not token:
+        return None, (jsonify({"error": "not_connected"}), 400)
     d = request.json or {}
-    artist, track = d.get("artist", ""), d.get("track", "")
-    if not artist or not track:
-        return jsonify({"error": "missing_meta"}), 400
-    params = {"sk": sk, "artist": artist, "track": track}
-    if d.get("album"):
-        params["album"] = d["album"]
-    if d.get("duration"):
-        try: params["duration"] = str(int(float(d["duration"])))
-        except Exception: pass
-    if extra:
-        params.update(extra(d))
-    ok, data = _lastfm_call(method, params, http=http, signed=True)
-    return (jsonify({"ok": True}), 200) if ok else (jsonify({"ok": False, "error": data}), 502)
+    if not d.get("artist") or not d.get("track"):
+        return None, (jsonify({"error": "missing_meta"}), 400)
+    return (token, d), None
 
-@app.route("/lastfm/now-playing", methods=["POST"])
-def lastfm_now_playing():
-    return _lastfm_track_action("track.updateNowPlaying")
+@app.route("/listenbrainz/now-playing", methods=["POST"])
+def listenbrainz_now_playing():
+    got, err = _lb_from_request()
+    if err:
+        return err
+    token, d = got
+    try:
+        status, data = _lb_request("submit-listens", token, {
+            "listen_type": "playing_now",
+            "payload": [{"track_metadata": _lb_track_metadata(d)}],
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": "unreachable", "message": str(e)}), 502
+    if status == 401:
+        return jsonify({"ok": False, "error": "invalid_token"}), 401
+    return (jsonify({"ok": True}), 200) if status == 200 else (jsonify({"ok": False, "error": data}), 502)
 
-@app.route("/lastfm/scrobble", methods=["POST"])
-def lastfm_scrobble():
-    return _lastfm_track_action(
-        "track.scrobble",
-        extra=lambda d: {"timestamp": str(int(d.get("timestamp") or time.time()))},
-    )
-
-@app.route("/lastfm/love", methods=["POST"])
-def lastfm_love():
-    return _lastfm_track_action("track.love")
-
-@app.route("/lastfm/unlove", methods=["POST"])
-def lastfm_unlove():
-    return _lastfm_track_action("track.unlove")
+@app.route("/listenbrainz/listen", methods=["POST"])
+def listenbrainz_listen():
+    """A finished listen: queued first, then sent along with anything still waiting."""
+    got, err = _lb_from_request()
+    if err:
+        return err
+    token, d = got
+    try:
+        listened_at = int(d.get("timestamp") or time.time())
+    except Exception:
+        listened_at = int(time.time())
+    with _lb_lock:
+        q = _lb_read_queue()
+        q.append({"listened_at": listened_at, "track_metadata": _lb_track_metadata(d)})
+        _lb_write_queue(q)
+    result = _lb_flush(token)
+    if result == "invalid_token":
+        return jsonify({"ok": False, "error": "invalid_token", "queued": True}), 401
+    return jsonify({"ok": result == "ok", "queued": result != "ok"})
 
 def parse_curl_to_dict(curl_str):
     """Extrahiert Headers aus einem cURL-Befehl (bash und Windows cmd Format)."""
@@ -4570,7 +4573,7 @@ def _track_meta(video_id):
     YouTube's mixed results (the "All" search tab, its top result especially, radio and
     autoplay picks) often leave the length, the album or the artists out, while the same song
     under the Songs filter has them. A song played from there went into the player, History
-    and Last.fm incomplete - and with no length there is no halfway point, so it was never
+    and ListenBrainz incomplete - and with no length there is no halfway point, so it was never
     scrobbled. The watch playlist for the song carries what the Songs tab shows; get_song fills
     in the length (and the uploader as the artist) for an upload that has no music entry.
     An upload that is not a release has no album anywhere on YouTube, so none is made up.

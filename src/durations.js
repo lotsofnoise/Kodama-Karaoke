@@ -2,7 +2,7 @@
 //
 // YouTube leaves these out for many songs depending on where they come from (the "All" search
 // tab, radio and autoplay picks, uploads): lists showed "—", playlist totals came out short, and
-// anything that needs them (the Last.fm scrobble point, the YouTube Music history sync) skipped
+// anything that needs them (the ListenBrainz listen point, the YouTube Music history sync) skipped
 // the song. Two sources fill them in, remembered here per video and used wherever a song is
 // shown or scrobbled:
 //   - the player, which knows a song's length once its audio is loaded;

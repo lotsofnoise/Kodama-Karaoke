@@ -65,7 +65,7 @@ playback position and lyrics, and only to people who have the Room ID.
 
 Everything else is regular Kodama: synced lyrics with word/syllable timing, Unison community
 lyrics, the Lyrics Composer, crossfade, visualizer, phone remote, OBS overlay, offline downloads,
-Discord Rich Presence and Last.fm scrobbling.
+Discord Rich Presence and ListenBrainz scrobbling.
 
 ---
 
@@ -234,14 +234,6 @@ cd ..\..
 
 Check that `src-tauri\resources\potgen\server\build` exists.
 
-### Optional: Last.fm sign-in for your users
-
-Skip this if you don't need Last.fm (it will show *"Not configured"*). Otherwise, set up the
-free signing service in **[lastfm-signer/README.md](lastfm-signer/README.md)** and put its address
-in `python-backend\lastfm_signer.json`, **then redo step 5** so the server picks it up. Never create
-`python-backend\lastfm_config.json` for a build you share — it would put your Last.fm secret
-into the installer.
-
 ### 8. Build the installer
 
 ```powershell
@@ -292,18 +284,16 @@ macOS and Linux should work too but haven't been tested for this fork; see
 
 ---
 
-## Last.fm scrobbling (for people who build it)
+## ListenBrainz scrobbling
 
 <p align="center">
-  <img src="photos/03.png" alt="Kodama connected to Last.fm" width="900">
-  <br><sub>Last.fm connected in Kodama's settings</sub>
+  <img src="photos/03.png" alt="Kodama connected to ListenBrainz" width="900">
+  <br><sub>ListenBrainz connected in Kodama's settings</sub>
 </p>
 
-Kodama can scrobble to Last.fm. Official Kodama builds its Last.fm key into the installer; this
-fork keeps the secret out of the installer by having a small free Cloudflare Worker sign the
-requests instead. If you build your own installer and want **Settings → Last.fm → Connect** to
-work for your users, follow **[lastfm-signer/README.md](lastfm-signer/README.md)** before
-building. Without it, Kodama shows Last.fm as *"Not configured"* and everything else works.
+Kodama can send what you listen to to [ListenBrainz](https://listenbrainz.org). Go to
+**Settings → ListenBrainz**, click **Get my token**, copy your user token from your ListenBrainz
+settings page, paste it in and click **Connect**. Nothing needs to be set up when building.
 
 ## How Karaoke Room works
 

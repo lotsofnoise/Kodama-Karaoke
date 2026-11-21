@@ -79,7 +79,7 @@ desktop.ini
 .DS_Store
 package-lock.json
 
-# Last.fm API credentials (local only)
+# Old Last.fm key files (no longer used; kept ignored so they are never committed)
 lastfm_config.json
 python-backend/lastfm_config.json
 
@@ -113,4 +113,3 @@ __pycache__/
 
 # PO-token generator source, cloned during the Windows build (README step 7)
 potgen-src/
-/lastfm-signer/.wrangler

@@ -259,7 +259,6 @@ export const BrandTwitch        = fab("twitch");
 export const BrandYoutube       = fab("youtube");
 export const BrandBluesky       = fab("bluesky");
 export const BrandTiktok        = fab("tiktok");
-export const BrandLastfm        = fab("lastfm");
 export const BrandGithub        = fab("github");
 export const BrandDiscord       = fab("discord");
 export const MugHot             = fa("mug-hot");

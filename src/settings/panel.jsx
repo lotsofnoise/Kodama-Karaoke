@@ -5,7 +5,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { API, thumb, useLang, useAnimations } from "../context.jsx";
 import { LANGUAGES, translate, translationProgress } from "../i18n.js";
 import {
-  ArrowCircleUp, ArrowClockwise, ArrowSquareOut, ArrowsClockwise, ArrowsLeftRight, BrandBluesky, BrandDiscord, BrandGithub, BrandLastfm, BrandTiktok, BrandTwitch, BrandYoutube, Bug, CaretDown, CaretUp, ChatText, Check, CheckCircle, CircleHalf, ClapperboardPlay, ClockCounterClockwise, Columns, Copy, DeviceMobile, DownloadSimple, Eye, EyeSlash, Eyedropper, Flask, Globe, HardDrives, ImageSquare, Info, Key, Keyboard, Link, Lock, LockOpen, MagnifyingGlass, MugHot, MusicNote, PaintBrushBroad, PencilSimple, PersonArmsSpread, Play, PlayCircle, ScreencastSimple, ShareNodes, Sliders, Sparkles, Tag, TextSize, Translate, Trash, UserCircle, Users, WaveformLines, X, EqualizerIcon, Pause, Microphone, SpeakerHigh, PuzzlePiece, Wind, EarListen, Bullhorn } from "../icons.jsx";
+  ArrowCircleUp, ArrowClockwise, ArrowSquareOut, ArrowsClockwise, ArrowsLeftRight, BrandBluesky, BrandDiscord, BrandGithub, BrandTiktok, BrandTwitch, BrandYoutube, Bug, CaretDown, CaretUp, ChatText, Check, CheckCircle, CircleHalf, ClapperboardPlay, ClockCounterClockwise, Columns, Copy, DeviceMobile, DownloadSimple, Eye, EyeSlash, Eyedropper, Flask, Globe, HardDrives, ImageSquare, Info, Key, Keyboard, Link, Lock, LockOpen, MagnifyingGlass, MugHot, MusicNote, PaintBrushBroad, PencilSimple, PersonArmsSpread, Play, PlayCircle, ScreencastSimple, ShareNodes, Sliders, Sparkles, Tag, TextSize, Translate, Trash, UserCircle, Users, WaveformLines, X, EqualizerIcon, Pause, Microphone, SpeakerHigh, PuzzlePiece, Wind, EarListen, Bullhorn } from "../icons.jsx";
 import { DEFAULT_LYRICS_PROVIDERS } from "../lyrics/providers.js";
 import { renderNewsBody } from "../modals/news-modal.jsx";
 import { RemoteControlPanel } from "../ui/remote-control.jsx";
@@ -34,8 +34,9 @@ import { DebugTab } from "./debug-tab.jsx";
 import { UnisonIdentitySection } from "./unison-identity.jsx";
 import { ComposerSettingsSection } from "./composer-section.jsx";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { ScrobbleOverrides } from "../lastfm/ScrobbleOverrides.jsx";
-import { loadPrimaryArtistOnly, savePrimaryArtistOnly } from "../lastfm/scrobble-rules.js";
+import { ScrobbleOverrides } from "../scrobble/ScrobbleOverrides.jsx";
+import { loadPrimaryArtistOnly, savePrimaryArtistOnly } from "../scrobble/scrobble-rules.js";
+import { extensionInstalled } from "../extensions/registry.js";
 import { openEqualizerWindow } from "../equalizer/window.js";
 
 async function openOverlayEditor() {
@@ -173,88 +174,114 @@ function AccentColorPicker({ value, onChange }) {
   );
 }
 
-// Last.fm connect/disconnect row. Uses the desktop auth flow: connect → open browser
-// → user authorizes → "I've authorized" exchanges the token for a session key.
+// ListenBrainz connect/disconnect row. ListenBrainz has no sign-in flow for apps: each person
+// pastes their own user token (listenbrainz.org/settings), which the server checks with
+// ListenBrainz before keeping it in the active profile.
 
-function LastfmRow() {
+const LISTENBRAINZ_TOKEN_URL = "https://listenbrainz.org/settings/";
+
+function ListenBrainzRow() {
   const t = useLang();
   const [primaryOnly, setPrimaryOnly] = useState(loadPrimaryArtistOnly);
-  const [status, setStatus] = useState({ enabled: true, connected: false, username: "" });
-  const [phase, setPhase] = useState("idle"); // idle | awaiting | working
-  const tokenRef = useRef(null);
+  const [status, setStatus] = useState({ connected: false, username: "" });
+  const [phase, setPhase] = useState("idle"); // idle | entering | working
+  const [token, setToken] = useState("");
+  const [showToken, setShowToken] = useState(false);
+  const extensionActive = extensionInstalled("listenbrainz");
 
   const loadStatus = useCallback(() => {
-    fetch(`${API}/lastfm/status`).then(r => r.json()).then(setStatus).catch(() => {});
+    fetch(`${API}/listenbrainz/status`).then(r => r.json()).then(d => setStatus(s => ({ ...s, ...d }))).catch(() => {});
   }, []);
   useEffect(() => { loadStatus(); }, [loadStatus]);
 
-  const startConnect = async () => {
+  const connect = async () => {
+    const value = token.trim();
+    if (!value) return;
     setPhase("working");
     try {
-      const d = await fetch(`${API}/lastfm/connect`).then(r => r.json());
-      if (d.error || !d.token) { toast.danger(t("lastfmError")); setPhase("idle"); return; }
-      tokenRef.current = d.token;
-      await openUrl(d.authUrl).catch(() => {});
-      setPhase("awaiting");
-    } catch { toast.danger(t("lastfmError")); setPhase("idle"); }
-  };
-
-  const finishConnect = async () => {
-    setPhase("working");
-    try {
-      const d = await fetch(`${API}/lastfm/session`, {
+      const r = await fetch(`${API}/listenbrainz/connect`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: tokenRef.current }),
-      }).then(r => r.json());
-      if (d.connected) { setStatus(s => ({ ...s, connected: true, username: d.username })); window.dispatchEvent(new Event("lastfm-changed")); toast.success(t("lastfmConnected")); }
-      else toast.danger(t("lastfmAuthFailed"));
-    } catch { toast.danger(t("lastfmError")); }
-    setPhase("idle");
+        body: JSON.stringify({ token: value }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (d.connected) {
+        setStatus(s => ({ ...s, connected: true, username: d.username }));
+        setToken("");
+        setPhase("idle");
+        window.dispatchEvent(new Event("listenbrainz-changed"));
+        toast.success(t("listenbrainzConnected"));
+        return;
+      }
+      toast.danger(d.error === "unreachable" ? t("listenbrainzUnreachable") : t("listenbrainzInvalidToken"));
+    } catch { toast.danger(t("listenbrainzUnreachable")); }
+    setPhase("entering");
   };
 
   const disconnect = async () => {
-    try { await fetch(`${API}/lastfm/disconnect`, { method: "POST" }); } catch {}
+    try { await fetch(`${API}/listenbrainz/disconnect`, { method: "POST" }); } catch {}
     setStatus(s => ({ ...s, connected: false, username: "" }));
-    window.dispatchEvent(new Event("lastfm-changed"));
-    toast.success(t("lastfmDisconnected"));
+    window.dispatchEvent(new Event("listenbrainz-changed"));
+    toast.success(t("listenbrainzDisconnected"));
   };
 
   let control;
-  if (!status.enabled) {
-    control = <span className="text-[length:var(--t11)] text-muted">{t("lastfmNotConfigured")}</span>;
-  } else if (status.connected) {
+  if (status.connected) {
     control = (
       <div className="flex items-center gap-2">
         <span className="text-[length:var(--t12)] text-muted truncate max-w-[160px]">@{status.username}</span>
         <Button variant="danger-soft" size="sm" onPress={disconnect}>{t("disconnect")}</Button>
       </div>
     );
-  } else if (phase === "awaiting") {
-    control = (
-      <div className="flex items-center gap-2">
-        <Button variant="ghost" size="sm" onPress={() => setPhase("idle")}>{t("cancel")}</Button>
-        <Button variant="primary" size="sm" onPress={finishConnect}>{t("lastfmIveAuthorized")}</Button>
-      </div>
-    );
-  } else {
-    control = (
-      <Button variant="primary" size="sm" isDisabled={phase === "working"} onPress={startConnect}>
-        {phase === "working" ? <Spinner size="sm" /> : t("connect")}
-      </Button>
-    );
+  } else if (phase === "idle") {
+    control = <Button variant="primary" size="sm" onPress={() => setPhase("entering")}>{t("connect")}</Button>;
   }
+
+  const description = extensionActive
+    ? t("listenbrainzExtensionActive")
+    : status.connected ? t("listenbrainzConnectedDesc")
+    : phase === "idle" ? t("listenbrainzDesc") : t("listenbrainzTokenDesc");
 
   return (
     <>
-    <SettingRow
-      label="Last.fm"
-      description={status.connected ? t("lastfmConnectedDesc") : (phase === "awaiting" ? t("lastfmAwaitingDesc") : t("lastfmDesc"))}
-      icon={<BrandLastfm />}
-    >
-      {control}
+    <SettingRow label="ListenBrainz" description={description} icon={<EarListen />} vertical={!status.connected && phase !== "idle"}>
+      {control ?? (
+        <div className="flex flex-col gap-2">
+          <div className="relative">
+            <TextFieldRoot aria-label={t("listenbrainzTokenPlaceholder")} value={token} onChange={setToken} className="w-full">
+              <InputRoot
+                type={showToken ? "text" : "password"}
+                placeholder={t("listenbrainzTokenPlaceholder")}
+                autoFocus
+                spellCheck={false}
+                onKeyDown={e => { if (e.key === "Enter") connect(); }}
+                className="pr-10 font-mono text-[length:var(--t12)]!"
+              />
+            </TextFieldRoot>
+            <button
+              onClick={() => setShowToken(v => !v)}
+              tabIndex={-1}
+              aria-label={showToken ? t("listenbrainzHideToken") : t("listenbrainzShowToken")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 flex items-center text-muted hover:text-primary"
+            >
+              {showToken ? <EyeSlash size={15} /> : <Eye size={15} />}
+            </button>
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <Button variant="ghost" size="sm" onPress={() => openUrl(LISTENBRAINZ_TOKEN_URL).catch(() => {})}>
+              <ArrowSquareOut size={14} /> {t("listenbrainzGetToken")}
+            </Button>
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" size="sm" onPress={() => { setPhase("idle"); setToken(""); }}>{t("cancel")}</Button>
+              <Button variant="primary" size="sm" isDisabled={phase === "working" || !token.trim()} onPress={connect}>
+                {phase === "working" ? <Spinner size="sm" /> : t("connect")}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </SettingRow>
 
-    {/* Only once there is a connection: rules for a scrobble that is not being sent would be
+    {/* Only once there is a connection: rules for listens that are not being sent would be
         settings about nothing. */}
     {status.connected && (
       <>
@@ -1422,9 +1449,9 @@ export function SettingsPanel({ onClose, onSectionChange, accent, onAccentChange
                   </SettingRow>
                 )}
 
-                <SectionAnchor id="conn-lastfm" />
-                <SectionLabel>Last.fm</SectionLabel>
-                <LastfmRow />
+                <SectionAnchor id="conn-listenbrainz" />
+                <SectionLabel>ListenBrainz</SectionLabel>
+                <ListenBrainzRow />
 
                 <SectionAnchor id="conn-ytmusic" />
                 <SectionLabel>YouTube Music</SectionLabel>

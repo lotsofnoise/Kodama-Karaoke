@@ -21,8 +21,8 @@ import { ProfileSwitcherModal } from "./modals/profile-switcher-modal.jsx";
 import { RemotePairModal } from "./ui/remote-control.jsx";
 import { DEFAULT_LYRICS_PROVIDERS, mergeLyricsProviders } from "./lyrics/providers.js";
 import { parseDurationToSeconds } from "./lyrics/parse.js";
-import { loadOverrides, loadPrimaryArtistOnly, removeOverride, resolveScrobbleMeta, setOverride } from "./lastfm/scrobble-rules.js";
-import { ScrobbleEditModal } from "./lastfm/ScrobbleEditModal.jsx";
+import { loadOverrides, loadPrimaryArtistOnly, removeOverride, resolveScrobbleMeta, setOverride } from "./scrobble/scrobble-rules.js";
+import { ScrobbleEditModal } from "./scrobble/ScrobbleEditModal.jsx";
 import { useVideoSync, VideoSyncView } from "./video-sync.jsx";
 import { applyTheme, applyShape } from "./theme.js";
 import { takeRescueRecord } from "./theme-rescue.js";
@@ -75,6 +75,7 @@ import { emitNowPlaying, openMiniPlayer, EV_HELLO, EV_SHOW_MAIN } from "./minipl
 import { shuffled } from "./shuffle.js";
 import { STATS_URL } from "./stats-endpoint.js";
 import BackgroundExtensions from "./extensions/background.jsx";
+import { extensionInstalled } from "./extensions/registry.js";
 import { KaraokeView } from "./karaoke/KaraokeView.jsx";
 import { KaraokeRoot } from "./karaoke/KaraokeRoot.jsx";
 import { karaoke } from "./karaoke/session.js";
@@ -4154,18 +4155,20 @@ export default function App() {
     return () => { localStorage.setItem("kiyoshi-total-playtime", String(playtimeSecRef.current)); clearInterval(id); };
   }, [isPlaying]);
 
-  // ─── Last.fm scrobbling ──────────────────────────────────────────────────────
-  const lastfmConnectedRef = useRef(false);
+  // ─── ListenBrainz ─────────────────────────────────────────────────────────────
+  // "Playing now" when a song starts, and a listen once half of it (or 4 minutes, whichever is
+  // less) has actually been played - ListenBrainz's own rule. Time counts only while playing, so
+  // skipping ahead does not turn a song you did not hear into a listen.
+  const listenbrainzConnectedRef = useRef(false);
   const scrobbleRef = useRef({ videoId: null, played: 0, scrobbled: false, startTs: 0 });
   // Which track's scrobble details are being edited, if any.
   const [scrobbleEdit, setScrobbleEdit] = useState(null);
-  // What gets scrobbled runs through the rules from issue #16: the primary-artist setting and
-  // any per-track correction. Read at send time rather than held in state, so a correction made
-  // while a track is playing applies to that track's own scrobble.
-  const lfmMeta = (raw) => {
+  // What gets sent runs through the rules from issue #16: the primary-artist setting and any
+  // per-track correction. Read at send time rather than held in state, so a correction made
+  // while a track is playing applies to that track's own listen.
+  const scrobbleMeta = (raw) => {
     const tr = withMeta(raw);   // length, album and artists it came without, if found since
-    // Artists and album as text, whatever shape they came in (a list of artists made the check
-    // throw every second, and that song never scrobbled).
+    // Artists and album as text, whatever shape they came in.
     const artists = Array.isArray(tr?.artists)
       ? tr.artists.map(a => (a && a.name) || a).filter(Boolean).join(", ")
       : (typeof tr?.artists === "string" ? tr.artists : "");
@@ -4179,72 +4182,80 @@ export default function App() {
         overrides: loadOverrides(),
       }),
       duration: Math.round(own || measured),
+      videoId: tr?.videoId || "",
     };
   };
-  const lfmPost = (path, body) => {
-    if (!lastfmConnectedRef.current) return;
-    fetch(`${API}/lastfm/${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => {});
+  // The ListenBrainz extension from the store does the same job; with both, every listen would
+  // be sent twice. Whoever installed the extension keeps it, and this stands aside.
+  const listenbrainzActive = () => listenbrainzConnectedRef.current && !extensionInstalled("listenbrainz");
+  const listenbrainzPost = (path, body) => {
+    if (!listenbrainzActive()) return;
+    fetch(`${API}/listenbrainz/${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+      .then(r => r.json().catch(() => ({})))
+      .then(d => {
+        if (path === "listen") console.log(`[listenbrainz] listen ${d?.ok ? "sent" : (d?.queued ? "queued, will retry" : "failed")}: ${body.artist} - ${body.track}`);
+        if (d?.error === "invalid_token") console.warn("[listenbrainz] the user token was not accepted - reconnect in Settings");
+      })
+      .catch(() => {});
   };
-  // Asked when Kodama opens - usually before its background server has started. A failed ask
-  // used to leave Last.fm "not connected" for the whole session (nothing sent, nothing
-  // scrobbled), so it is asked again until the server answers.
-  const lastfmCheckRef = useRef(0);
-  const refreshLastfm = useCallback(() => {
-    const gen = ++lastfmCheckRef.current;
+  // Asked when Kodama opens - usually before its background server has started - so it is asked
+  // again until the server answers (a single failed ask would leave it "not connected" for the
+  // whole session).
+  const listenbrainzCheckRef = useRef(0);
+  const refreshListenbrainz = useCallback(() => {
+    const gen = ++listenbrainzCheckRef.current;
     const ask = (attempt) => {
-      fetch(`${API}/lastfm/status`).then(r => r.json())
-        .then(d => { if (gen === lastfmCheckRef.current) lastfmConnectedRef.current = !!d.connected; })
+      fetch(`${API}/listenbrainz/status`).then(r => r.json())
+        .then(d => { if (gen === listenbrainzCheckRef.current) listenbrainzConnectedRef.current = !!d.connected; })
         .catch(() => {
-          if (gen === lastfmCheckRef.current && attempt < 120) setTimeout(() => ask(attempt + 1), 1000);
+          if (gen === listenbrainzCheckRef.current && attempt < 120) setTimeout(() => ask(attempt + 1), 1000);
         });
     };
     ask(0);
   }, []);
   useEffect(() => {
-    refreshLastfm();
-    const h = () => refreshLastfm();
-    window.addEventListener("lastfm-changed", h);
+    refreshListenbrainz();
+    const h = () => refreshListenbrainz();
+    window.addEventListener("listenbrainz-changed", h);
     window.addEventListener("profile-switched", h);
-    return () => { window.removeEventListener("lastfm-changed", h); window.removeEventListener("profile-switched", h); };
-  }, [refreshLastfm]);
-  // On track change → reset scrobble state. Now Playing and the scrobble's start time wait for
-  // the song to actually play: a song loaded paused (restored when Kodama opens, or queued into
-  // an empty player) is not being listened to yet.
+    return () => { window.removeEventListener("listenbrainz-changed", h); window.removeEventListener("profile-switched", h); };
+  }, [refreshListenbrainz]);
+  // On track change → reset the listen. "Playing now" and the listen's start time wait for the
+  // song to actually play: a song loaded paused (restored when Kodama opens, or queued into an
+  // empty player) is not being listened to yet.
   useEffect(() => {
     const vid = currentTrack?.videoId;
     scrobbleRef.current = { videoId: vid || null, played: 0, scrobbled: false, startTs: 0, npAt: 0 };
   }, [currentTrack?.videoId]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Accumulate listening seconds while playing; scrobble once past the threshold.
+  // Count listening seconds while playing; send the listen once past the threshold.
   useEffect(() => {
     if (!isPlaying) return;
     const st0 = scrobbleRef.current;
     if (st0.videoId && st0.videoId === currentTrack?.videoId) {
       if (!st0.startTs) st0.startTs = Math.floor(Date.now() / 1000);
-      // Sent when playback starts, and again on resuming after a while (Last.fm drops a
-      // Now Playing once the song's length has passed).
+      // Sent when playback starts, and again on resuming after a while.
       if (Date.now() - st0.npAt > 30000) {
-        const m = lfmMeta(currentTrack);
-        if (m.artist && m.track && lastfmConnectedRef.current) { st0.npAt = Date.now(); lfmPost("now-playing", m); }
+        const m = scrobbleMeta(currentTrack);
+        if (m.artist && m.track && listenbrainzActive()) { st0.npAt = Date.now(); listenbrainzPost("now-playing", { ...m, clientVersion: __APP_VERSION__ }); }
       }
     }
     const id = setInterval(() => {
       const st = scrobbleRef.current;
       if (!st.videoId) return;
-      // Playback started before Last.fm's status was known (just after Kodama opened): send
-      // Now Playing as soon as it is.
-      if (!st.npAt && lastfmConnectedRef.current) {
-        const nm = lfmMeta(currentTrack);
-        if (nm.artist && nm.track) { st.npAt = Date.now(); lfmPost("now-playing", nm); }
+      // Playback started before the connection was known (just after Kodama opened): send
+      // "playing now" as soon as it is.
+      if (!st.npAt && listenbrainzActive()) {
+        const nm = scrobbleMeta(currentTrack);
+        if (nm.artist && nm.track) { st.npAt = Date.now(); listenbrainzPost("now-playing", { ...nm, clientVersion: __APP_VERSION__ }); }
       }
       if (st.scrobbled) return;
       st.played += 1;
-      const m = lfmMeta(currentTrack);
-      if (m.duration < 30) return; // Last.fm: don't scrobble tracks under 30s
-      const threshold = Math.min(m.duration / 2, 240); // >50% or >4min
+      const m = scrobbleMeta(currentTrack);
+      // Half the song or 4 minutes, whichever is less; 4 minutes if the length is unknown.
+      const threshold = m.duration > 0 ? Math.min(m.duration / 2, 240) : 240;
       if (st.played >= threshold && m.artist && m.track) {
         st.scrobbled = true;
-        console.log(`[lastfm] scrobble: ${m.artist} - ${m.track} (${st.played}s of ${m.duration}s)`);
-        lfmPost("scrobble", { ...m, timestamp: st.startTs || Math.floor(Date.now() / 1000) - st.played });
+        listenbrainzPost("listen", { ...m, clientVersion: __APP_VERSION__, timestamp: st.startTs || Math.floor(Date.now() / 1000) - st.played });
       }
     }, 1000);
     return () => clearInterval(id);
@@ -4254,7 +4265,7 @@ export default function App() {
   // Registers the play in the account's real YT Music watch history (backend pings the
   // playbackTracking URL from ytmusicapi's get_song), so it counts toward YT Music's own
   // Recap/stats — separate from, and independent of, Kodama's own local History list.
-  // Same accumulate-then-fire-once threshold as Last.fm scrobbling above, reusing the same
+  // Same accumulate-then-fire-once threshold as the ListenBrainz listens above, reusing the same
   // "counts as played" definition rather than inventing a second one.
   const ytHistoryRef = useRef({ videoId: null, played: 0, sent: false });
   useEffect(() => {
@@ -4812,7 +4823,7 @@ export default function App() {
 
   // A playing song that came without its length, album or artists (the "All" search tab, radio
   // and autoplay picks, uploads): ask the server for the full details - what the Songs search tab
-  // shows - and complete it in the player, the queue, History and the Last.fm scrobble. The song
+  // shows - and complete it in the player, the queue, History and the ListenBrainz listen. The song
   // object itself is completed in place, so the player does not reload what it is playing.
   useEffect(() => {
     const tr = currentTrack;
@@ -6058,17 +6069,6 @@ export default function App() {
         body: JSON.stringify({ rating: newRating, ...entry }),
       });
       if (!r.ok) throw new Error(`like failed: ${r.status}`);
-      // Last.fm Loved sync
-      if (lastfmConnectedRef.current) {
-        const lfArtist = artists.replace(/\s*-\s*Topic$/i, "").trim();
-        const lfTitle = (track.title || "").trim();
-        if (lfArtist && lfTitle) {
-          fetch(`${API}/lastfm/${newRating === "LIKE" ? "love" : "unlove"}`, {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ artist: lfArtist, track: lfTitle }),
-          }).catch(() => {});
-        }
-      }
     } catch {
       // Not saved: put the heart (and an open Liked Songs list) back as they were.
       flip(wasLiked);

@@ -75,7 +75,7 @@ export function SettingsSidebarContent({ tab, setTab, onSectionSelect, updateInf
     ] },
     { id: "connections",   label: t("connections"),   iconEl: <Link size={18} />, sections: [
       { id: "conn-discord", label: "Discord" },
-      { id: "conn-lastfm",  label: "Last.fm" },
+      { id: "conn-listenbrainz", label: "ListenBrainz" },
       { id: "conn-ytmusic", label: "YouTube Music" },
       { id: "conn-remote",  label: t("remoteControl") },
     ] },
